@@ -1,0 +1,992 @@
+//go:build windows
+
+package platform
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"image"
+	"image/png"
+	"math"
+	"os"
+	"sync"
+	"syscall"
+	"time"
+	"unsafe"
+)
+
+// Pure Go Win32 adapter, the same approach Viva's own Windows backend takes:
+// lazily loaded DLL procedures, no cgo.
+
+var (
+	user32   = syscall.NewLazyDLL("user32.dll")
+	gdi32    = syscall.NewLazyDLL("gdi32.dll")
+	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	shcore   = syscall.NewLazyDLL("shcore.dll")
+	dwmapi   = syscall.NewLazyDLL("dwmapi.dll")
+	shell32  = syscall.NewLazyDLL("shell32.dll")
+	advapi32 = syscall.NewLazyDLL("advapi32.dll")
+
+	procRegisterClassExW              = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW               = user32.NewProc("CreateWindowExW")
+	procDefWindowProcW                = user32.NewProc("DefWindowProcW")
+	procPostMessageW                  = user32.NewProc("PostMessageW")
+	procRegisterHotKey                = user32.NewProc("RegisterHotKey")
+	procUnregisterHotKey              = user32.NewProc("UnregisterHotKey")
+	procEnumDisplayMonitors           = user32.NewProc("EnumDisplayMonitors")
+	procGetMonitorInfoW               = user32.NewProc("GetMonitorInfoW")
+	procGetDC                         = user32.NewProc("GetDC")
+	procReleaseDC                     = user32.NewProc("ReleaseDC")
+	procEnumThreadWindows             = user32.NewProc("EnumThreadWindows")
+	procEnumWindows                   = user32.NewProc("EnumWindows")
+	procGetWindowTextW                = user32.NewProc("GetWindowTextW")
+	procGetWindowLongPtrW             = user32.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtrW             = user32.NewProc("SetWindowLongPtrW")
+	procSetWindowPos                  = user32.NewProc("SetWindowPos")
+	procSetForegroundWindow           = user32.NewProc("SetForegroundWindow")
+	procSetFocus                      = user32.NewProc("SetFocus")
+	procKeybdEvent                    = user32.NewProc("keybd_event")
+	procSetWindowDisplayAffinity      = user32.NewProc("SetWindowDisplayAffinity")
+	procIsWindowVisible               = user32.NewProc("IsWindowVisible")
+	procIsIconic                      = user32.NewProc("IsIconic")
+	procGetWindowThreadProcessId      = user32.NewProc("GetWindowThreadProcessId")
+	procGetWindowRect                 = user32.NewProc("GetWindowRect")
+	procOpenClipboard                 = user32.NewProc("OpenClipboard")
+	procCloseClipboard                = user32.NewProc("CloseClipboard")
+	procEmptyClipboard                = user32.NewProc("EmptyClipboard")
+	procSetClipboardData              = user32.NewProc("SetClipboardData")
+	procGetClipboardData              = user32.NewProc("GetClipboardData")
+	procRegisterClipboardFormatW      = user32.NewProc("RegisterClipboardFormatW")
+	procIsClipboardFormatAvailable    = user32.NewProc("IsClipboardFormatAvailable")
+	procGetClipboardSequenceNumber    = user32.NewProc("GetClipboardSequenceNumber")
+	procAddClipboardFormatListener    = user32.NewProc("AddClipboardFormatListener")
+	procRemoveClipboardFormatListener = user32.NewProc("RemoveClipboardFormatListener")
+	procSendInput                     = user32.NewProc("SendInput")
+	procSetCursorPos                  = user32.NewProc("SetCursorPos")
+	procGetCursorPos                  = user32.NewProc("GetCursorPos")
+	procGetThreadDpiAwarenessContext  = user32.NewProc("GetThreadDpiAwarenessContext")
+	procAreDpiAwarenessContextsEqual  = user32.NewProc("AreDpiAwarenessContextsEqual")
+	procSetThreadDpiAwarenessContext  = user32.NewProc("SetThreadDpiAwarenessContext")
+	procSetWindowsHookExW             = user32.NewProc("SetWindowsHookExW")
+	procUnhookWindowsHookEx           = user32.NewProc("UnhookWindowsHookEx")
+	procCallNextHookEx                = user32.NewProc("CallNextHookEx")
+	procGetAsyncKeyState              = user32.NewProc("GetAsyncKeyState")
+
+	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
+	procCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
+	procSelectObject       = gdi32.NewProc("SelectObject")
+	procBitBlt             = gdi32.NewProc("BitBlt")
+	procDeleteObject       = gdi32.NewProc("DeleteObject")
+	procDeleteDC           = gdi32.NewProc("DeleteDC")
+
+	procGetModuleHandleW   = kernel32.NewProc("GetModuleHandleW")
+	procGetCurrentThreadId = kernel32.NewProc("GetCurrentThreadId")
+	procGlobalAlloc        = kernel32.NewProc("GlobalAlloc")
+	procGlobalFree         = kernel32.NewProc("GlobalFree")
+	procGlobalLock         = kernel32.NewProc("GlobalLock")
+	procGlobalUnlock       = kernel32.NewProc("GlobalUnlock")
+	procGlobalSize         = kernel32.NewProc("GlobalSize")
+
+	procGetDpiForMonitor      = shcore.NewProc("GetDpiForMonitor")
+	procDwmGetWindowAttribute = dwmapi.NewProc("DwmGetWindowAttribute")
+	procShellExecuteW         = shell32.NewProc("ShellExecuteW")
+
+	procRegOpenKeyExW    = advapi32.NewProc("RegOpenKeyExW")
+	procRegSetValueExW   = advapi32.NewProc("RegSetValueExW")
+	procRegDeleteValueW  = advapi32.NewProc("RegDeleteValueW")
+	procRegQueryValueExW = advapi32.NewProc("RegQueryValueExW")
+	procRegCloseKey      = advapi32.NewProc("RegCloseKey")
+)
+
+const (
+	wmHotkey          = 0x0312
+	wmClipboardUpdate = 0x031D
+	wmApp             = 0x8000
+	wmDrainMain       = wmApp + 1
+
+	gwlExStyle      = ^uintptr(19) // GWL_EXSTYLE = -20
+	wsExToolWindow  = 0x00000080
+	wsExTopmost     = 0x00000008
+	wsExAppWindow   = 0x00040000
+	swpShowWindow   = 0x0040
+	swpFrameChanged = 0x0020
+	swpNoActivate   = 0x0010
+	hwndTopmost     = ^uintptr(0) // (HWND)-1
+	hwndMessage     = ^uintptr(2) // (HWND)-3
+
+	srcCopy    = 0x00CC0020
+	captureBlt = 0x40000000
+
+	cfDIBV5         = 17
+	gmemMoveable    = 0x0002
+	errHotkeyExists = 1409
+
+	inputMouse       = 0
+	mouseEventFWheel = 0x0800
+	wheelDelta       = 120
+
+	vkMenu          = 0x12
+	keyEventFKeyUp  = 0x0002
+	wdaMonitor      = 0x01
+	wdaExcludeCapt  = 0x11
+	dwmExtendedRect = 9
+	dwmCloaked      = 14
+	monitorPrimary  = 1
+)
+
+type point struct{ X, Y int32 }
+type rect struct{ Left, Top, Right, Bottom int32 }
+
+type windowClassEx struct {
+	Size       uint32
+	Style      uint32
+	WndProc    uintptr
+	ClsExtra   int32
+	WndExtra   int32
+	Instance   uintptr
+	Icon       uintptr
+	Cursor     uintptr
+	Background uintptr
+	MenuName   *uint16
+	ClassName  *uint16
+	IconSm     uintptr
+}
+
+type monitorInfo struct {
+	Size    uint32
+	Monitor rect
+	Work    rect
+	Flags   uint32
+}
+
+type bitmapInfoHeader struct {
+	Size          uint32
+	Width         int32
+	Height        int32
+	Planes        uint16
+	BitCount      uint16
+	Compression   uint32
+	SizeImage     uint32
+	XPelsPerMeter int32
+	YPelsPerMeter int32
+	ClrUsed       uint32
+	ClrImportant  uint32
+}
+
+type mouseInput struct {
+	DX, DY    int32
+	MouseData uint32
+	Flags     uint32
+	Time      uint32
+	ExtraInfo uintptr
+}
+
+type input struct {
+	Type  uint32
+	Mouse mouseInput
+}
+
+// pointer turns an address returned by a Win32 call into an unsafe.Pointer
+// without the uintptr→Pointer conversion go vet rejects.
+func pointer(address uintptr) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&address))
+}
+
+// ---- lifecycle -------------------------------------------------------------
+
+var (
+	messageWindow uintptr
+	clipboardFn   func()
+	clipboardMu   sync.Mutex
+)
+
+func windowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
+	switch msg {
+	case wmDrainMain:
+		queue.drain()
+		return 0
+	case wmHotkey:
+		if fn := hotkeys.get(uint32(wParam)); fn != nil {
+			fn()
+		}
+		return 0
+	case wmClipboardUpdate:
+		clipboardMu.Lock()
+		fn := clipboardFn
+		clipboardMu.Unlock()
+		if fn != nil {
+			fn()
+		}
+		return 0
+	}
+	result, _, _ := procDefWindowProcW.Call(hwnd, msg, wParam, lParam)
+	return result
+}
+
+// Init creates SnapLite's message-only window on the event-loop thread.
+// Viva's GetMessageW(0) loop on the same thread dispatches its messages.
+func Init() error {
+	ensureDPIAwareness()
+	name, _ := syscall.UTF16PtrFromString("SnapLiteMessageWindow")
+	instance, _, _ := procGetModuleHandleW.Call(0)
+	class := windowClassEx{WndProc: syscall.NewCallback(windowProc), Instance: instance, ClassName: name}
+	class.Size = uint32(unsafe.Sizeof(class))
+	if atom, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&class))); atom == 0 {
+		return fmt.Errorf("platform: RegisterClassExW: %w", err)
+	}
+	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(name)), 0, 0, 0, 0, 0, 0, hwndMessage, 0, instance, 0)
+	if hwnd == 0 {
+		return fmt.Errorf("platform: CreateWindowExW: %w", err)
+	}
+	messageWindow = hwnd
+	return nil
+}
+
+func ensureDPIAwareness() {
+	if procGetThreadDpiAwarenessContext.Find() != nil || procSetThreadDpiAwarenessContext.Find() != nil {
+		return
+	}
+	const perMonitorV2 = ^uintptr(3) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+	current, _, _ := procGetThreadDpiAwarenessContext.Call()
+	if equal, _, _ := procAreDpiAwarenessContextsEqual.Call(current, perMonitorV2); equal == 0 {
+		procSetThreadDpiAwarenessContext.Call(perMonitorV2)
+	}
+}
+
+// PostMain queues fn for the event-loop thread.
+func PostMain(fn func()) {
+	if queue.push(fn) && messageWindow != 0 {
+		procPostMessageW.Call(messageWindow, wmDrainMain, 0, 0)
+	}
+}
+
+// ---- displays --------------------------------------------------------------
+
+type winMonitor struct {
+	handle   uintptr
+	geometry monitorGeometry
+	primary  bool
+}
+
+var monitors struct {
+	mu   sync.Mutex
+	list []winMonitor
+}
+
+// syscall.NewCallback slots are never released, so every enumeration
+// callback is created once and reports into a package-level collector that a
+// mutex serialises.
+var (
+	callbacksOnce  sync.Once
+	monitorProc    uintptr
+	threadWindowCb uintptr
+	topWindowCb    uintptr
+
+	enumMu          sync.Mutex
+	enumMonitorsOut []winMonitor
+	enumTitle       string
+	enumFound       uintptr
+	enumWindows     []Rect
+	enumOwn         bool
+)
+
+func initCallbacks() {
+	callbacksOnce.Do(func() {
+		monitorProc = syscall.NewCallback(monitorCallback)
+		threadWindowCb = syscall.NewCallback(threadWindowCallback)
+		topWindowCb = syscall.NewCallback(topWindowCallback)
+	})
+}
+
+func monitorCallback(handle, dc, area, data uintptr) uintptr {
+	info := monitorInfo{}
+	info.Size = uint32(unsafe.Sizeof(info))
+	if ok, _, _ := procGetMonitorInfoW.Call(handle, uintptr(unsafe.Pointer(&info))); ok == 0 {
+		return 1
+	}
+	scale := 1.0
+	if procGetDpiForMonitor.Find() == nil {
+		var dx, dy uint32
+		if hr, _, _ := procGetDpiForMonitor.Call(handle, 0, uintptr(unsafe.Pointer(&dx)), uintptr(unsafe.Pointer(&dy))); hr == 0 && dx > 0 {
+			scale = float64(dx) / 96
+		}
+	}
+	m := info.Monitor
+	enumMonitorsOut = append(enumMonitorsOut, winMonitor{
+		handle: handle,
+		geometry: monitorGeometry{
+			Physical: Rect{X: float64(m.Left), Y: float64(m.Top), W: float64(m.Right - m.Left), H: float64(m.Bottom - m.Top)},
+			Scale:    scale,
+		},
+		primary: info.Flags&monitorPrimary != 0,
+	})
+	return 1
+}
+
+func enumMonitors() ([]winMonitor, error) {
+	initCallbacks()
+	enumMu.Lock()
+	enumMonitorsOut = nil
+	ok, _, err := procEnumDisplayMonitors.Call(0, 0, monitorProc, 0)
+	list := enumMonitorsOut
+	enumMonitorsOut = nil
+	enumMu.Unlock()
+	if ok == 0 {
+		return nil, fmt.Errorf("platform: EnumDisplayMonitors: %w", err)
+	}
+	monitors.mu.Lock()
+	monitors.list = list
+	monitors.mu.Unlock()
+	return list, nil
+}
+
+func cachedMonitors() []monitorGeometry {
+	monitors.mu.Lock()
+	list := monitors.list
+	monitors.mu.Unlock()
+	if len(list) == 0 {
+		list, _ = enumMonitors()
+	}
+	out := make([]monitorGeometry, len(list))
+	for i, m := range list {
+		out[i] = m.geometry
+	}
+	return out
+}
+
+// Displays lists the monitors. ID is the enumeration index (HMONITOR does not
+// fit a uint32 safely); Bounds are in Viva's Windows logical coordinates,
+// physical pixels divided by that monitor's own scale.
+func Displays() ([]Display, error) {
+	list, err := enumMonitors()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Display, len(list))
+	for i, m := range list {
+		out[i] = Display{ID: uint32(i), Bounds: m.geometry.logical(), Scale: m.geometry.Scale, Primary: m.primary}
+	}
+	return out, nil
+}
+
+func monitorByID(id uint32) (monitorGeometry, error) {
+	monitors.mu.Lock()
+	list := monitors.list
+	monitors.mu.Unlock()
+	if int(id) >= len(list) {
+		var err error
+		if list, err = enumMonitors(); err != nil {
+			return monitorGeometry{}, err
+		}
+	}
+	if int(id) >= len(list) {
+		return monitorGeometry{}, fmt.Errorf("platform: display %d not found", id)
+	}
+	return list[id].geometry, nil
+}
+
+// ---- capture (GDI) ---------------------------------------------------------
+
+func capturePhysical(r Rect) (*image.RGBA, error) {
+	x, y, w, h := int32(r.X), int32(r.Y), int32(r.W), int32(r.H)
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("platform: empty capture rectangle")
+	}
+	screen, _, _ := procGetDC.Call(0)
+	if screen == 0 {
+		return nil, fmt.Errorf("platform: GetDC failed")
+	}
+	defer procReleaseDC.Call(0, screen)
+	memory, _, _ := procCreateCompatibleDC.Call(screen)
+	if memory == 0 {
+		return nil, fmt.Errorf("platform: CreateCompatibleDC failed")
+	}
+	defer procDeleteDC.Call(memory)
+	header := bitmapInfoHeader{Width: w, Height: -h, Planes: 1, BitCount: 32}
+	header.Size = uint32(unsafe.Sizeof(header))
+	var bits uintptr
+	bitmap, _, _ := procCreateDIBSection.Call(memory, uintptr(unsafe.Pointer(&header)), 0, uintptr(unsafe.Pointer(&bits)), 0, 0)
+	if bitmap == 0 || bits == 0 {
+		return nil, fmt.Errorf("platform: CreateDIBSection failed")
+	}
+	defer procDeleteObject.Call(bitmap)
+	old, _, _ := procSelectObject.Call(memory, bitmap)
+	defer procSelectObject.Call(memory, old)
+	if ok, _, err := procBitBlt.Call(memory, 0, 0, uintptr(w), uintptr(h), screen, uintptr(x), uintptr(y), srcCopy|captureBlt); ok == 0 {
+		return nil, fmt.Errorf("platform: BitBlt: %w", err)
+	}
+	src := unsafe.Slice((*byte)(pointer(bits)), int(w)*int(h)*4)
+	return bgraToRGBA(src, int(w), int(h), int(w)*4), nil
+}
+
+func CaptureDisplay(id uint32) (*image.RGBA, error) {
+	m, err := monitorByID(id)
+	if err != nil {
+		return nil, err
+	}
+	return capturePhysical(m.Physical)
+}
+
+func CaptureRect(displayID uint32, r Rect) (*image.RGBA, error) {
+	m, err := monitorByID(displayID)
+	if err != nil {
+		return nil, err
+	}
+	return capturePhysical(m.toPhysical(r))
+}
+
+func PrefetchCaptureContent()           {}
+func HasScreenCapturePermission() bool  { return true }
+func RequestScreenCapturePermission()   {}
+func HasAccessibilityPermission() bool  { return true }
+func RequestAccessibilityPermission()   {}
+func OpenPrivacySettings(string)        {}
+func RevealDirectory(path string) error { return shellOpen(path) }
+
+func shellOpen(path string) error {
+	verb, err := syscall.UTF16PtrFromString("open")
+	if err != nil {
+		return err
+	}
+	target, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	if r, _, _ := procShellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(target)), 0, 0, 1); r <= 32 {
+		return fmt.Errorf("platform: ShellExecuteW failed: %d", r)
+	}
+	return nil
+}
+
+// ---- windows ---------------------------------------------------------------
+
+func windowText(hwnd uintptr) string {
+	var buf [256]uint16
+	n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	return syscall.UTF16ToString(buf[:n])
+}
+
+// findWindow looks for a window of this thread (Viva creates its windows on
+// the event-loop thread) by its unique title.
+func findWindow(title string) uintptr {
+	initCallbacks()
+	enumMu.Lock()
+	defer enumMu.Unlock()
+	enumTitle, enumFound = title, 0
+	thread, _, _ := procGetCurrentThreadId.Call()
+	procEnumThreadWindows.Call(thread, threadWindowCb, 0)
+	return enumFound
+}
+
+func threadWindowCallback(hwnd, data uintptr) uintptr {
+	if windowText(hwnd) == enumTitle {
+		enumFound = hwnd
+		return 0
+	}
+	return 1
+}
+
+func RaiseOverlay(title string, bounds Rect) error {
+	hwnd := findWindow(title)
+	if hwnd == 0 {
+		return ErrNotFound
+	}
+	style, _, _ := procGetWindowLongPtrW.Call(hwnd, gwlExStyle)
+	style = (style | wsExToolWindow | wsExTopmost) &^ wsExAppWindow
+	procSetWindowLongPtrW.Call(hwnd, gwlExStyle, style)
+	phys := bounds
+	if m, ok := findMonitor(cachedMonitors(), bounds.X+bounds.W/2, bounds.Y+bounds.H/2); ok {
+		phys = m.toPhysical(bounds)
+	}
+	procSetWindowPos.Call(hwnd, hwndTopmost, uintptr(int32(phys.X)), uintptr(int32(phys.Y)), uintptr(int32(phys.W)), uintptr(int32(phys.H)), swpShowWindow|swpFrameChanged)
+	// The foreground lock is lifted for a process that just received input;
+	// a synthetic Alt press counts, which is the classic way to take the
+	// foreground from a hotkey or tray handler.
+	procKeybdEvent.Call(vkMenu, 0, 0, 0)
+	procKeybdEvent.Call(vkMenu, 0, keyEventFKeyUp, 0)
+	procSetForegroundWindow.Call(hwnd)
+	procSetFocus.Call(hwnd)
+	return nil
+}
+
+// FloatWindow keeps the window topmost at bounds without activating it.
+func FloatWindow(title string, bounds Rect) error {
+	hwnd := findWindow(title)
+	if hwnd == 0 {
+		return ErrNotFound
+	}
+	style, _, _ := procGetWindowLongPtrW.Call(hwnd, gwlExStyle)
+	style = (style | wsExToolWindow | wsExTopmost) &^ wsExAppWindow
+	procSetWindowLongPtrW.Call(hwnd, gwlExStyle, style)
+	phys := bounds
+	if m, ok := findMonitor(cachedMonitors(), bounds.X+bounds.W/2, bounds.Y+bounds.H/2); ok {
+		phys = m.toPhysical(bounds)
+	}
+	procSetWindowPos.Call(hwnd, hwndTopmost, uintptr(int32(phys.X)), uintptr(int32(phys.Y)), uintptr(int32(phys.W)), uintptr(int32(phys.H)), swpShowWindow|swpFrameChanged|swpNoActivate)
+	return nil
+}
+
+func SetExcludedFromCapture(title string) error {
+	hwnd := findWindow(title)
+	if hwnd == 0 {
+		return ErrNotFound
+	}
+	if ok, _, _ := procSetWindowDisplayAffinity.Call(hwnd, wdaExcludeCapt); ok == 0 {
+		procSetWindowDisplayAffinity.Call(hwnd, wdaMonitor)
+	}
+	return nil
+}
+
+func windowBounds(hwnd uintptr, geometry []monitorGeometry) (Rect, bool) {
+	var r rect
+	if procDwmGetWindowAttribute.Find() == nil {
+		if hr, _, _ := procDwmGetWindowAttribute.Call(hwnd, dwmExtendedRect, uintptr(unsafe.Pointer(&r)), unsafe.Sizeof(r)); hr != 0 {
+			procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
+		}
+	} else {
+		procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
+	}
+	phys := Rect{X: float64(r.Left), Y: float64(r.Top), W: float64(r.Right - r.Left), H: float64(r.Bottom - r.Top)}
+	if phys.W < 40 || phys.H < 40 {
+		return Rect{}, false
+	}
+	m, ok := findMonitorPhysical(geometry, phys.X+phys.W/2, phys.Y+phys.H/2)
+	if !ok {
+		return Rect{}, false
+	}
+	s := m.Scale
+	l := m.logical()
+	return Rect{X: l.X + (phys.X-m.Physical.X)/s, Y: l.Y + (phys.Y-m.Physical.Y)/s, W: phys.W / s, H: phys.H / s}, true
+}
+
+func ownWindow(hwnd uintptr) bool {
+	var pid uint32
+	procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	return int(pid) == os.Getpid()
+}
+
+func ListWindows(excludeOwn bool) ([]Rect, error) {
+	initCallbacks()
+	monitorList := cachedMonitors()
+	enumMu.Lock()
+	enumWindows, enumOwn, enumGeometry = nil, excludeOwn, monitorList
+	ok, _, err := procEnumWindows.Call(topWindowCb, 0)
+	out := enumWindows
+	enumWindows = nil
+	enumMu.Unlock()
+	if ok == 0 {
+		return nil, fmt.Errorf("platform: EnumWindows: %w", err)
+	}
+	return out, nil
+}
+
+var enumGeometry []monitorGeometry
+
+func topWindowCallback(hwnd, data uintptr) uintptr {
+	if visible, _, _ := procIsWindowVisible.Call(hwnd); visible == 0 {
+		return 1
+	}
+	if iconic, _, _ := procIsIconic.Call(hwnd); iconic != 0 {
+		return 1
+	}
+	if enumOwn && ownWindow(hwnd) {
+		return 1
+	}
+	if procDwmGetWindowAttribute.Find() == nil {
+		var cloaked uint32
+		if hr, _, _ := procDwmGetWindowAttribute.Call(hwnd, dwmCloaked, uintptr(unsafe.Pointer(&cloaked)), 4); hr == 0 && cloaked != 0 {
+			return 1
+		}
+	}
+	if r, ok := windowBounds(hwnd, enumGeometry); ok {
+		enumWindows = append(enumWindows, r)
+	}
+	return 1
+}
+
+func WindowAt(x, y float64, excludeOwn bool) (Rect, bool) {
+	ws, err := ListWindows(excludeOwn)
+	if err != nil {
+		return Rect{}, false
+	}
+	return windowAt(ws, x, y)
+}
+
+func ActivateApp() {}
+
+// ---- hotkeys ---------------------------------------------------------------
+
+func RegisterHotkey(h Hotkey, fn func()) (func(), error) {
+	vk, ok := winVirtualKey(h.Key)
+	if !ok {
+		return nil, fmt.Errorf("platform: hotkey key %q is not a letter, digit or F1–F12", h.Key)
+	}
+	if messageWindow == 0 {
+		return nil, errors.New("platform: Init has not run")
+	}
+	if h.Mods&ModRightAlt != 0 {
+		return registerRightAltHotkey(h, fn)
+	}
+	id := hotkeys.add(fn)
+	if ok, _, err := procRegisterHotKey.Call(messageWindow, uintptr(id), uintptr(winModifiers(h.Mods)), uintptr(vk)); ok == 0 {
+		hotkeys.remove(id)
+		if errno, isErrno := err.(syscall.Errno); isErrno && errno == errHotkeyExists {
+			return nil, ErrHotkeyTaken
+		}
+		return nil, fmt.Errorf("platform: RegisterHotKey: %w", err)
+	}
+	return once(func() {
+		PostMain(func() { procUnregisterHotKey.Call(messageWindow, uintptr(id)) })
+		hotkeys.remove(id)
+	}), nil
+}
+
+// RegisterHotKey cannot tell the two Alt keys apart, so right-Alt hotkeys go
+// through one low-level keyboard hook, installed on the event-loop thread
+// (whose message loop runs it) while at least one such hotkey exists.
+
+const (
+	whKeyboardLL     = 13
+	wmKeyDown        = 0x0100
+	wmSysKeyDown     = 0x0104
+	llkhfInjected    = 0x10
+	vkShift          = 0x10
+	vkRightMenu      = 0xA5
+	vkNoName         = 0xFC // VK_NONAME: an unassigned key
+	inputKeyboard    = 1
+	keyEventFKeyUpLL = 0x0002
+)
+
+type kbdLLHookStruct struct {
+	VKCode    uint32
+	ScanCode  uint32
+	Flags     uint32
+	Time      uint32
+	ExtraInfo uintptr
+}
+
+type keybdInput struct {
+	VK        uint16
+	Scan      uint16
+	Flags     uint32
+	Time      uint32
+	ExtraInfo uintptr
+}
+
+// keyboardInputRecord is INPUT with its union sized like the mouse member, the
+// largest, so SendInput accepts its cbSize.
+type keyboardInputRecord struct {
+	Type uint32
+	Key  keybdInput
+	_    [8]byte
+}
+
+type rightAltEntry struct {
+	hotkey Hotkey
+	fn     func()
+}
+
+var (
+	rightAltHook     uintptr
+	rightAltCallback uintptr // created once: NewCallback slots are never freed
+	rightAltHotkeys  = map[uint32]rightAltEntry{}
+	rightAltNext     uint32
+)
+
+func keyDown(vk uintptr) bool {
+	state, _, _ := procGetAsyncKeyState.Call(vk)
+	return state&0x8000 != 0
+}
+
+func rightAltHookProc(code int, wParam, lParam uintptr) uintptr {
+	if code == 0 && (wParam == wmKeyDown || wParam == wmSysKeyDown) {
+		info := (*kbdLLHookStruct)(pointer(lParam))
+		if info.Flags&llkhfInjected == 0 {
+			vk := uint16(info.VKCode)
+			rightAlt, shift := keyDown(vkRightMenu), keyDown(vkShift)
+			for _, entry := range rightAltHotkeys {
+				if rightAltMatch(entry.hotkey, vk, rightAlt, shift) {
+					suppressAltMenu()
+					PostMain(entry.fn) // the hook must return quickly
+					return 1           // swallow the key
+				}
+			}
+		}
+	}
+	result, _, _ := procCallNextHookEx.Call(0, uintptr(code), wParam, lParam)
+	return result
+}
+
+// suppressAltMenu taps an unassigned key so that releasing Alt afterwards does
+// not open the foreground window's menu bar.
+func suppressAltMenu() {
+	events := [2]keyboardInputRecord{
+		{Type: inputKeyboard, Key: keybdInput{VK: vkNoName}},
+		{Type: inputKeyboard, Key: keybdInput{VK: vkNoName, Flags: keyEventFKeyUpLL}},
+	}
+	procSendInput.Call(2, uintptr(unsafe.Pointer(&events[0])), unsafe.Sizeof(events[0]))
+}
+
+func registerRightAltHotkey(h Hotkey, fn func()) (func(), error) {
+	if rightAltHook == 0 {
+		if rightAltCallback == 0 {
+			rightAltCallback = syscall.NewCallback(rightAltHookProc)
+		}
+		instance, _, _ := procGetModuleHandleW.Call(0)
+		hook, _, err := procSetWindowsHookExW.Call(whKeyboardLL, rightAltCallback, instance, 0)
+		if hook == 0 {
+			return nil, fmt.Errorf("platform: SetWindowsHookExW: %w", err)
+		}
+		rightAltHook = hook
+	}
+	rightAltNext++
+	id := rightAltNext
+	rightAltHotkeys[id] = rightAltEntry{hotkey: h, fn: fn}
+	return once(func() {
+		PostMain(func() {
+			delete(rightAltHotkeys, id)
+			if len(rightAltHotkeys) == 0 && rightAltHook != 0 {
+				procUnhookWindowsHookEx.Call(rightAltHook)
+				rightAltHook = 0
+			}
+		})
+	}), nil
+}
+
+// ---- clipboard -------------------------------------------------------------
+
+func registerFormat(name string) uintptr {
+	p, _ := syscall.UTF16PtrFromString(name)
+	format, _, _ := procRegisterClipboardFormatW.Call(uintptr(unsafe.Pointer(p)))
+	return format
+}
+
+func openClipboard() error {
+	for attempt := 0; attempt < 5; attempt++ {
+		if ok, _, _ := procOpenClipboard.Call(messageWindow); ok != 0 {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return errors.New("platform: the clipboard is in use by another program")
+}
+
+func globalBytes(data []byte) (uintptr, error) {
+	handle, _, err := procGlobalAlloc.Call(gmemMoveable, uintptr(len(data)))
+	if handle == 0 {
+		return 0, fmt.Errorf("platform: GlobalAlloc: %w", err)
+	}
+	address, _, _ := procGlobalLock.Call(handle)
+	if address == 0 {
+		procGlobalFree.Call(handle)
+		return 0, errors.New("platform: GlobalLock failed")
+	}
+	copy(unsafe.Slice((*byte)(pointer(address)), len(data)), data)
+	procGlobalUnlock.Call(handle)
+	return handle, nil
+}
+
+func SetClipboardImage(img *image.RGBA) error {
+	var buf bytes.Buffer
+	if err := (&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(&buf, img); err != nil {
+		return err
+	}
+	return setClipboard(dibV5(img), buf.Bytes())
+}
+
+func SetClipboardPNG(data []byte) error {
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	rgba, ok := img.(*image.RGBA)
+	if !ok {
+		b := img.Bounds()
+		rgba = image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+		for y := 0; y < b.Dy(); y++ {
+			for x := 0; x < b.Dx(); x++ {
+				rgba.Set(x, y, img.At(b.Min.X+x, b.Min.Y+y))
+			}
+		}
+	}
+	return setClipboard(dibV5(rgba), data)
+}
+
+func setClipboard(dib, pngData []byte) error {
+	if err := openClipboard(); err != nil {
+		return err
+	}
+	defer procCloseClipboard.Call()
+	procEmptyClipboard.Call()
+	dibHandle, err := globalBytes(dib)
+	if err != nil {
+		return err
+	}
+	if ok, _, err := procSetClipboardData.Call(cfDIBV5, dibHandle); ok == 0 {
+		procGlobalFree.Call(dibHandle)
+		return fmt.Errorf("platform: SetClipboardData(CF_DIBV5): %w", err)
+	}
+	if pngHandle, err := globalBytes(pngData); err == nil {
+		if ok, _, _ := procSetClipboardData.Call(registerFormat("PNG"), pngHandle); ok == 0 {
+			procGlobalFree.Call(pngHandle)
+		}
+	}
+	// The sequence number moves when the clipboard closes.
+	defer func() { setOwnClipboardCount(ClipboardChangeCount()) }()
+	return nil
+}
+
+func ClipboardChangeCount() int64 {
+	n, _, _ := procGetClipboardSequenceNumber.Call()
+	return int64(uint32(n))
+}
+
+// WatchClipboard is event driven: WM_CLIPBOARDUPDATE reaches the message window.
+func WatchClipboard(fn func()) (func(), error) {
+	if messageWindow == 0 {
+		return nil, errors.New("platform: Init has not run")
+	}
+	clipboardMu.Lock()
+	clipboardFn = fn
+	clipboardMu.Unlock()
+	if ok, _, err := procAddClipboardFormatListener.Call(messageWindow); ok == 0 {
+		return nil, fmt.Errorf("platform: AddClipboardFormatListener: %w", err)
+	}
+	return once(func() {
+		clipboardMu.Lock()
+		clipboardFn = nil
+		clipboardMu.Unlock()
+		PostMain(func() { procRemoveClipboardFormatListener.Call(messageWindow) })
+	}), nil
+}
+
+func ClipboardConcealed() bool {
+	for _, name := range []string{"ExcludeClipboardContentFromMonitorProcessing", "Clipboard Viewer Ignore"} {
+		if ok, _, _ := procIsClipboardFormatAvailable.Call(registerFormat(name)); ok != 0 {
+			return true
+		}
+	}
+	history := registerFormat("CanIncludeInClipboardHistory")
+	if ok, _, _ := procIsClipboardFormatAvailable.Call(history); ok == 0 {
+		return false
+	}
+	if openClipboard() != nil {
+		return false
+	}
+	defer procCloseClipboard.Call()
+	handle, _, _ := procGetClipboardData.Call(history)
+	if handle == 0 {
+		return false
+	}
+	if size, _, _ := procGlobalSize.Call(handle); size < 4 {
+		return false
+	}
+	address, _, _ := procGlobalLock.Call(handle)
+	if address == 0 {
+		return false
+	}
+	value := *(*uint32)(pointer(address))
+	procGlobalUnlock.Call(handle)
+	return value == 0
+}
+
+// ---- input injection -------------------------------------------------------
+
+func physicalPoint(x, y float64) (int32, int32) {
+	if m, ok := findMonitor(cachedMonitors(), x, y); ok {
+		p := m.toPhysical(Rect{X: x, Y: y})
+		return int32(p.X), int32(p.Y)
+	}
+	return int32(math.Round(x)), int32(math.Round(y))
+}
+
+func ScrollAt(x, y, dy float64) error {
+	if err := MoveCursor(x, y); err != nil {
+		return err
+	}
+	notches := wheelNotches(dy)
+	if notches == 0 {
+		return nil
+	}
+	event := input{Type: inputMouse, Mouse: mouseInput{MouseData: uint32(notches * wheelDelta), Flags: mouseEventFWheel}}
+	if sent, _, err := procSendInput.Call(1, uintptr(unsafe.Pointer(&event)), unsafe.Sizeof(event)); sent != 1 {
+		return fmt.Errorf("platform: SendInput: %w", err)
+	}
+	return nil
+}
+
+func MoveCursor(x, y float64) error {
+	px, py := physicalPoint(x, y)
+	if ok, _, err := procSetCursorPos.Call(uintptr(px), uintptr(py)); ok == 0 {
+		return fmt.Errorf("platform: SetCursorPos: %w", err)
+	}
+	return nil
+}
+
+func CursorPosition() (float64, float64) {
+	var p point
+	procGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
+	if m, ok := findMonitorPhysical(cachedMonitors(), float64(p.X), float64(p.Y)); ok {
+		l := m.logical()
+		return l.X + (float64(p.X)-m.Physical.X)/m.Scale, l.Y + (float64(p.Y)-m.Physical.Y)/m.Scale
+	}
+	return float64(p.X), float64(p.Y)
+}
+
+// ---- launch at login (HKCU\...\Run) ----------------------------------------
+
+const (
+	hkeyCurrentUser = 0x80000001
+	keySetValue     = 0x0002
+	keyQueryValue   = 0x0001
+	regSZ           = 1
+	runKey          = `Software\Microsoft\Windows\CurrentVersion\Run`
+	runValue        = "简截"
+)
+
+func openRunKey(access uintptr) (uintptr, error) {
+	path, _ := syscall.UTF16PtrFromString(runKey)
+	var key uintptr
+	if status, _, _ := procRegOpenKeyExW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(path)), 0, access, uintptr(unsafe.Pointer(&key))); status != 0 {
+		return 0, fmt.Errorf("platform: RegOpenKeyExW: %d", status)
+	}
+	return key, nil
+}
+
+func SetLaunchAtLogin(enabled bool) error {
+	key, err := openRunKey(keySetValue)
+	if err != nil {
+		return err
+	}
+	defer procRegCloseKey.Call(key)
+	name, _ := syscall.UTF16PtrFromString(runValue)
+	if !enabled {
+		procRegDeleteValueW.Call(key, uintptr(unsafe.Pointer(name)))
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	value, _ := syscall.UTF16FromString(`"` + exe + `" --background`)
+	if status, _, _ := procRegSetValueExW.Call(key, uintptr(unsafe.Pointer(name)), 0, regSZ, uintptr(unsafe.Pointer(&value[0])), uintptr(len(value)*2)); status != 0 {
+		return fmt.Errorf("platform: RegSetValueExW: %d", status)
+	}
+	return nil
+}
+
+func LaunchAtLogin() bool {
+	key, err := openRunKey(keyQueryValue)
+	if err != nil {
+		return false
+	}
+	defer procRegCloseKey.Call(key)
+	name, _ := syscall.UTF16PtrFromString(runValue)
+	status, _, _ := procRegQueryValueExW.Call(key, uintptr(unsafe.Pointer(name)), 0, 0, 0, 0)
+	return status == 0
+}
+
+// RightAltDown reports whether the right Alt key is held now. A window that
+// records a hotkey uses it, since key events do not say which Alt is down.
+func RightAltDown() bool { return keyDown(vkRightMenu) }

@@ -1,0 +1,15 @@
+[app]
+name = "简截"
+id = "dev.snaplite.app"
+version = "0.1.0"
+executable = "snaplite"
+package = "./cmd/snaplite"
+icon = "assets/icon.png"
+
+[mac]
+min_system = "14.0"
+category = "public.app-category.utilities"
+
+[mac.info]
+NSScreenCaptureUsageDescription = "简截需要屏幕录制权限来截取屏幕画面。"
+LSUIElement = "1"
