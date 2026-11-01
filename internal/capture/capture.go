@@ -17,6 +17,11 @@ type Frame struct {
 	Display platform.Display
 	Image   *image.RGBA // physical pixels
 	Bitmap  vui.Bitmap  // the same pixels, premultiplied BGRA, for Viva
+	// View is the overlay window's logical size when it is not the
+	// display's: the size the window paints at when the toolkit's idea of
+	// the display's scale differs from the platform's. Zero means
+	// Display.Bounds.
+	View vui.Size
 }
 
 // NewFrame wraps a capture of a display.
@@ -25,16 +30,31 @@ func NewFrame(d platform.Display, img *image.RGBA) Frame {
 }
 
 // Scale is image pixels per logical pixel: the capture's width over the
-// display's logical width (never assumed to be 2).
+// overlay window's logical width (never assumed to be 2).
 func (f *Frame) Scale() float64 {
+	size := f.Size()
+	if size.Width <= 0 || f.Image == nil {
+		return 1
+	}
+	return float64(f.Image.Bounds().Dx()) / float64(size.Width)
+}
+
+// DisplayScale is image pixels per logical pixel of the display, as the
+// platform counts them: what pins and 1× output are sized by, whatever
+// size the overlay window paints at.
+func (f *Frame) DisplayScale() float64 {
 	if f.Display.Bounds.W <= 0 || f.Image == nil {
 		return 1
 	}
 	return float64(f.Image.Bounds().Dx()) / f.Display.Bounds.W
 }
 
-// Size is the display's size in logical pixels: the overlay window's size.
+// Size is the overlay window's size in logical pixels: View, else the
+// display's size.
 func (f *Frame) Size() vui.Size {
+	if f.View.Width > 0 && f.View.Height > 0 {
+		return f.View
+	}
 	return vui.Size{Width: float32(f.Display.Bounds.W), Height: float32(f.Display.Bounds.H)}
 }
 
@@ -60,7 +80,9 @@ func (f *Frame) RectToImage(r vui.Rect) image.Rectangle {
 // ScreenRect maps a window rectangle to screen logical coordinates.
 func (f *Frame) ScreenRect(r vui.Rect) platform.Rect {
 	b := f.Display.Bounds
-	return platform.Rect{X: b.X + float64(r.X), Y: b.Y + float64(r.Y), W: float64(r.Width), H: float64(r.Height)}
+	size := f.Size()
+	kx, ky := b.W/float64(size.Width), b.H/float64(size.Height)
+	return platform.Rect{X: b.X + float64(r.X)*kx, Y: b.Y + float64(r.Y)*ky, W: float64(r.Width) * kx, H: float64(r.Height) * ky}
 }
 
 // Crop copies an image rectangle.

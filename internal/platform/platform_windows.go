@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"os"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -31,6 +33,7 @@ var (
 	procCreateWindowExW               = user32.NewProc("CreateWindowExW")
 	procDefWindowProcW                = user32.NewProc("DefWindowProcW")
 	procPostMessageW                  = user32.NewProc("PostMessageW")
+	procSendMessageW                  = user32.NewProc("SendMessageW")
 	procRegisterHotKey                = user32.NewProc("RegisterHotKey")
 	procUnregisterHotKey              = user32.NewProc("UnregisterHotKey")
 	procEnumDisplayMonitors           = user32.NewProc("EnumDisplayMonitors")
@@ -98,6 +101,7 @@ var (
 )
 
 const (
+	wmDPIChanged      = 0x02E0
 	wmHotkey          = 0x0312
 	wmClipboardUpdate = 0x031D
 	wmApp             = 0x8000
@@ -222,15 +226,37 @@ func Init() error {
 	return nil
 }
 
+// perMonitorV2 is DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (-4).
+const perMonitorV2 = ^uintptr(3)
+
 func ensureDPIAwareness() {
 	if procGetThreadDpiAwarenessContext.Find() != nil || procSetThreadDpiAwarenessContext.Find() != nil {
 		return
 	}
-	const perMonitorV2 = ^uintptr(3) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 	current, _, _ := procGetThreadDpiAwarenessContext.Call()
 	if equal, _, _ := procAreDpiAwarenessContextsEqual.Call(current, perMonitorV2); equal == 0 {
 		procSetThreadDpiAwarenessContext.Call(perMonitorV2)
 	}
+}
+
+// withPerMonitorDPI runs fn on this goroutine's thread with per-monitor DPI
+// awareness, then puts the thread's awareness back. Monitor rectangles,
+// window rectangles, the cursor and GDI captures are only in physical pixels
+// on such a thread. Viva asks for it process-wide, but captures run on
+// goroutines, and when the process-wide request does not take (the system
+// or a compatibility setting decides first), a 4K display at 200% next to a
+// 100% one is reported as 1920×1080 and only its top-left quarter is captured.
+func withPerMonitorDPI(fn func()) {
+	if procSetThreadDpiAwarenessContext.Find() != nil {
+		fn()
+		return
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if old, _, _ := procSetThreadDpiAwarenessContext.Call(perMonitorV2); old != 0 {
+		defer procSetThreadDpiAwarenessContext.Call(old)
+	}
+	fn()
 }
 
 // PostMain queues fn for the event-loop thread.
@@ -307,7 +333,9 @@ func enumMonitors() ([]winMonitor, error) {
 	initCallbacks()
 	enumMu.Lock()
 	enumMonitorsOut = nil
-	ok, _, err := procEnumDisplayMonitors.Call(0, 0, monitorProc, 0)
+	var ok uintptr
+	var err error
+	withPerMonitorDPI(func() { ok, _, err = procEnumDisplayMonitors.Call(0, 0, monitorProc, 0) })
 	list := enumMonitorsOut
 	enumMonitorsOut = nil
 	enumMu.Unlock()
@@ -367,7 +395,12 @@ func monitorByID(id uint32) (monitorGeometry, error) {
 
 // ---- capture (GDI) ---------------------------------------------------------
 
-func capturePhysical(r Rect) (*image.RGBA, error) {
+func capturePhysical(r Rect) (img *image.RGBA, err error) {
+	withPerMonitorDPI(func() { img, err = capturePhysicalOnThread(r) })
+	return img, err
+}
+
+func capturePhysicalOnThread(r Rect) (*image.RGBA, error) {
 	x, y, w, h := int32(r.X), int32(r.Y), int32(r.W), int32(r.H)
 	if w <= 0 || h <= 0 {
 		return nil, fmt.Errorf("platform: empty capture rectangle")
@@ -463,7 +496,9 @@ func RaiseOverlay(title string, bounds Rect) error {
 	if hwnd == 0 {
 		return ErrNotFound
 	}
-	placeWindow(hwnd, bounds, swpShowWindow|swpFrameChanged)
+	if m, phys, ok := placeWindow(hwnd, bounds, swpShowWindow|swpFrameChanged); ok {
+		tellScale(hwnd, m, phys)
+	}
 	// The foreground lock is lifted for a process that just received input;
 	// a synthetic Alt press counts, which is the classic way to take the
 	// foreground from a hotkey or tray handler.
@@ -494,12 +529,15 @@ func FloatWindow(title string, bounds Rect) error {
 // screen's edges. Once the scale has changed the window is placed again,
 // right away (the message is sent during SetWindowPos) and once more on the
 // next loop turn in case it was posted instead.
-func placeWindow(hwnd uintptr, bounds Rect, flags uintptr) {
+//
+// It returns the display and the physical rectangle, ok false when bounds
+// are on no known display (and were used as physical pixels).
+func placeWindow(hwnd uintptr, bounds Rect, flags uintptr) (m monitorGeometry, phys Rect, ok bool) {
 	style, _, _ := procGetWindowLongPtrW.Call(hwnd, gwlExStyle)
 	style = (style | wsExToolWindow | wsExTopmost) &^ wsExAppWindow
 	procSetWindowLongPtrW.Call(hwnd, gwlExStyle, style)
-	phys := bounds
-	if m, ok := monitorForBounds(cachedMonitors(), bounds); ok {
+	phys = bounds
+	if m, ok = monitorForBounds(cachedMonitors(), bounds); ok {
 		phys = m.toPhysical(bounds)
 	}
 	setWindowRect(hwnd, phys, flags)
@@ -511,6 +549,20 @@ func placeWindow(hwnd uintptr, bounds Rect, flags uintptr) {
 			setWindowRect(hwnd, phys, flags|swpNoActivate)
 		}
 	})
+	return m, phys, ok
+}
+
+// tellScale sends the window the WM_DPICHANGED of the display it now
+// covers. Viva keeps its own copy of a window's scale and only updates it
+// from that message; when the move did not produce one (the window was
+// hidden, or the system thought the DPI unchanged), an overlay on a 200%
+// display would go on painting at the primary's 100%, and its selection
+// would stop at a quarter of the screen. Viva also moves the window to the
+// message's rectangle, which is phys.
+func tellScale(hwnd uintptr, m monitorGeometry, phys Rect) {
+	dpi := uintptr(math.Round(m.Scale * 96))
+	r := rect{Left: int32(phys.X), Top: int32(phys.Y), Right: int32(phys.X + phys.W), Bottom: int32(phys.Y + phys.H)}
+	procSendMessageW.Call(hwnd, wmDPIChanged, dpi|dpi<<16, uintptr(unsafe.Pointer(&r)))
 }
 
 func setWindowRect(hwnd uintptr, phys Rect, flags uintptr) {
@@ -559,7 +611,9 @@ func ListWindows(excludeOwn bool) ([]Rect, error) {
 	monitorList := cachedMonitors()
 	enumMu.Lock()
 	enumWindows, enumOwn, enumGeometry = nil, excludeOwn, monitorList
-	ok, _, err := procEnumWindows.Call(topWindowCb, 0)
+	var ok uintptr
+	var err error
+	withPerMonitorDPI(func() { ok, _, err = procEnumWindows.Call(topWindowCb, 0) })
 	out := enumWindows
 	enumWindows = nil
 	enumMu.Unlock()
@@ -844,7 +898,7 @@ func ClipboardConcealed() bool {
 
 func CursorPosition() (float64, float64) {
 	var p point
-	procGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
+	withPerMonitorDPI(func() { procGetCursorPos.Call(uintptr(unsafe.Pointer(&p))) })
 	if m, ok := findMonitorPhysical(cachedMonitors(), float64(p.X), float64(p.Y)); ok {
 		l := m.logical()
 		return l.X + (float64(p.X)-m.Physical.X)/m.Scale, l.Y + (float64(p.Y)-m.Physical.Y)/m.Scale

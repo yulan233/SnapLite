@@ -64,12 +64,48 @@ type State struct {
 
 func newState(frame *capture.Frame) *State {
 	st := &State{Frame: frame, Doc: annotate.NewDocument()}
-	st.Doc.Source, st.Doc.Scale = frame.Image, frame.Scale()
+	st.Doc.Source, st.Doc.Scale = frame.Image, frame.DisplayScale()
 	return st
 }
 
 // size is the overlay window's logical size.
 func (s *State) size() vui.Size { return s.Frame.Size() }
+
+// fit adopts the size the window really paints at, when it is not the one
+// the frame expects: then the toolkit's scale for the window is not the
+// display's, and mapping by the expected size would cover only part of the
+// picture (a quarter of a 200% display taken for 100%). Everything held in
+// window coordinates is scaled along. It reports whether the size changed.
+func (s *State) fit(size vui.Size) bool {
+	old := s.size()
+	if size.Width <= 0 || size.Height <= 0 || old.Width <= 0 || old.Height <= 0 ||
+		abs32(size.Width-old.Width) < 0.5 && abs32(size.Height-old.Height) < 0.5 {
+		return false
+	}
+	kx, ky := size.Width/old.Width, size.Height/old.Height
+	scale := func(r vui.Rect) vui.Rect {
+		return vui.Rect{X: r.X * kx, Y: r.Y * ky, Width: r.Width * kx, Height: r.Height * ky}
+	}
+	s.Frame.View = size
+	for i, w := range s.windows {
+		s.windows[i] = scale(w)
+	}
+	s.Snap = scale(s.Snap)
+	s.Hover = vui.Point{X: s.Hover.X * kx, Y: s.Hover.Y * ky}
+	s.DragFrom = vui.Point{X: s.DragFrom.X * kx, Y: s.DragFrom.Y * ky}
+	s.SelAtDrag = scale(s.SelAtDrag)
+	if !empty(s.Sel) {
+		s.setSel(scale(s.Sel))
+	}
+	return true
+}
+
+func abs32(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
 
 // setSel replaces the selection, normalising, clamping it to the window and
 // updating the size label.

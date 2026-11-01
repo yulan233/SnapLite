@@ -16,6 +16,9 @@ var white = vui.RGB24(0xFFFFFF)
 // timestamp of the hint capsule.
 func (c *Controller) paint(i int, canvas *vui.Canvas, size vui.Size) {
 	st := c.States[i]
+	// The other write: the window's real size, which the first paint learns
+	// before any input can depend on it.
+	st.fit(size)
 	t := c.tokens
 	bounds := vui.Rect{Width: size.Width, Height: size.Height}
 

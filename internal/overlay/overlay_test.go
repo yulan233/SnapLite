@@ -447,3 +447,47 @@ func TestMosaicFromShortcut(t *testing.T) {
 		t.Fatalf("block = %d, want %d", shapes[0].Block, block)
 	}
 }
+
+// TestWindowAtAnotherScale is a 4K display at 200% whose overlay the
+// toolkit paints at 100%: the window is 3840×2160 logical, not 1920×1080.
+// The selection must still reach every edge of the picture.
+func TestWindowAtAnotherScale(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 3840, 2160))
+	display := platform.Display{ID: 1, Bounds: platform.Rect{X: 1280, W: 1920, H: 1080}, Scale: 2}
+	session := &capture.Session{Frames: []capture.Frame{capture.NewFrame(display, img)},
+		Windows: []platform.Rect{{X: 1280 + 960, Y: 540, W: 480, H: 270}}}
+	var results []Result
+	c := NewController(session, sui.Light(), func(res Result) { results = append(results, res) })
+	config := c.Config(0)
+	config.Width, config.Height = 3840, 2160
+	d, err := app.NewDriver(config, new(vui.Canvas))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Close)
+	st := c.States[0]
+	if st.size() != (vui.Size{Width: 3840, Height: 2160}) || st.Frame.Scale() != 1 {
+		t.Fatalf("size %v, scale %v: the overlay keeps the expected size", st.size(), st.Frame.Scale())
+	}
+	if w := st.windows[0]; w != (vui.Rect{X: 1920, Y: 1080, Width: 960, Height: 540}) {
+		t.Fatalf("snapping rectangle %+v is not scaled to the window", w)
+	}
+	for _, step := range []func() error{
+		func() error { return d.Press(0, 0, vui.PointerButtonPrimary) },
+		func() error { return d.Move(2000, 1000) },
+		func() error { return d.Move(3840, 2160) },
+		func() error { return d.Release(3840, 2160, vui.PointerButtonPrimary) },
+	} {
+		if err := step(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.finish(Done)
+	if len(results) != 1 || results[0].Sel != img.Bounds() {
+		t.Fatalf("results %+v, want the whole picture %v", results, img.Bounds())
+	}
+	// Pins and 1× output still go by the display's own scale.
+	if s := st.Frame.ScreenRect(results[0].SelWindow); s != display.Bounds || st.Frame.DisplayScale() != 2 {
+		t.Fatalf("screen rect %+v, display scale %v", s, st.Frame.DisplayScale())
+	}
+}

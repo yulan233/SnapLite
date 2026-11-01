@@ -227,6 +227,10 @@ func (s *Shell) openOverlays(session *capture.Session, err error, started time.T
 		s.log.Printf("capture: %v", err)
 		return
 	}
+	for _, f := range session.Frames {
+		b := f.Image.Bounds()
+		s.log.Printf("display %d: bounds %+v scale %v, captured %d×%d", f.Display.ID, f.Display.Bounds, f.Display.Scale, b.Dx(), b.Dy())
+	}
 	controller := overlay.NewController(session, sui.Current(), func(res overlay.Result) { s.overlayDone(session, res) })
 	s.overlays = s.overlays[:0]
 	for i := range session.Frames {
@@ -285,7 +289,7 @@ func (s *Shell) overlayDone(session *capture.Session, res overlay.Result) {
 	}
 	frame := res.Frame
 	crop := frame.Crop(res.Sel)
-	scale := frame.Scale()
+	scale := frame.DisplayScale()
 	screen, sel := frame.Display.Bounds, frame.ScreenRect(res.SelWindow)
 	session.Release()
 	res.Frame = nil // the goroutine needs only the crop, not the whole capture
