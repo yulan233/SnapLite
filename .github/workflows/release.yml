@@ -1,0 +1,49 @@
+# Pushing a tag like v0.2.0 builds every package and publishes a GitHub Release.
+# One macOS runner builds everything: the macOS build needs cgo, and the
+# Windows build is pure Go, cross-compiled exactly as on a developer Mac.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: |
+          go test ./...
+          GOOS=windows GOARCH=amd64 go vet ./...
+
+      - name: Set version from tag
+        run: sed -i '' "s/^version = .*/version = \"${GITHUB_REF_NAME#v}\"/" viva.toml
+
+      - name: Package macOS
+        run: |
+          mkdir -p dist
+          for arch in arm64 amd64; do
+            ./scripts/package-mac.sh "$arch"
+            ditto -c -k --keepParent "build/简截.app" "dist/SnapLite-${GITHUB_REF_NAME}-macos-$arch.zip"
+          done
+
+      - name: Package Windows
+        run: |
+          for arch in amd64 arm64; do
+            go run github.com/vivaui/viva/cmd/viva@v0.2.1 package -target windows -arch "$arch" -format zip -o "build/windows-$arch"
+            cp "build/windows-$arch"/*.zip "dist/SnapLite-${GITHUB_REF_NAME}-windows-$arch.zip"
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

@@ -41,6 +41,7 @@ GOOS=windows GOARCH=amd64 go build -o build/snaplite.exe ./cmd/snaplite    # Win
 GOOS=windows GOARCH=arm64 go build -o build/snaplite-arm64.exe ./cmd/snaplite
 
 ./scripts/package-mac.sh                                                    # build/简截.app（LSUIElement、屏幕录制说明、ad-hoc 签名）
+./scripts/package-mac.sh amd64                                              # Intel Mac 版（在 Apple 芯片上交叉编译）
 go run github.com/vivaui/viva/cmd/viva@v0.2.1 package -target windows -arch amd64 -format zip -o build/windows
 go run ./cmd/genicon/main.go                                                # 重新生成 assets/icon.png、tray-template.png
 go build -tags probe -o build/platform-probe ./cmd/platform-probe           # 平台层真机探针（会触发权限弹窗）
@@ -52,6 +53,16 @@ go build -tags probe -o build/platform-probe ./cmd/platform-probe           # �
 gofmt -l . && go vet ./... && go test ./... -count=1
 GOOS=windows GOARCH=amd64 go vet ./... && GOOS=windows GOARCH=arm64 go build ./...
 ```
+
+## 发布
+
+推送 `v` 开头的标签后，[`.github/workflows/release.yml`](.github/workflows/release.yml) 在 macOS runner 上跑测试，把标签号写进 `viva.toml` 的版本号，打出 macOS（arm64 / x64）与 Windows（x64 / arm64）四个 zip，并创建 GitHub Release（发布说明按提交自动生成）：
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+发布包没有正式签名：macOS 下载后需右键「打开」或执行 `xattr -dr com.apple.quarantine 简截.app`，Windows 会有 SmartScreen 提示。以后要签名时，`viva package` 会读取环境变量（`APPLE_CERTIFICATE`、`APPLE_ID` 等用于签名与公证，`WINDOWS_CERTIFICATE` 等用于 Windows 签名，见 `viva help package`），放进仓库 Secrets；macOS 还需去掉 `scripts/package-mac.sh` 里的 `-no-sign` 和 ad-hoc 签名，并在 `codesign` 后再签名公证。
 
 ## 权限（macOS）
 
