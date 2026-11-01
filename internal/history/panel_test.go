@@ -93,7 +93,7 @@ func three(s *Store) {
 
 func TestPanelEmptyState(t *testing.T) {
 	r := newPanelRig(t, nil)
-	if !r.has(EmptyText) || !r.has("共 0 条") || r.rowCount() != 0 {
+	if !r.has(EmptyText()) || !r.has("共 0 条") || r.rowCount() != 0 {
 		t.Fatal("empty state")
 	}
 }
@@ -184,7 +184,7 @@ func TestPanelClearConfirm(t *testing.T) {
 	}
 	r.click(clearID)
 	r.click(confirmClear)
-	if len(r.store.Items()) != 0 || !r.has(EmptyText) || !r.has("共 0 条") {
+	if len(r.store.Items()) != 0 || !r.has(EmptyText()) || !r.has("共 0 条") {
 		t.Fatal("confirmed clear empties the history")
 	}
 }

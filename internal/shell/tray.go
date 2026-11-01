@@ -6,6 +6,7 @@ import (
 	"github.com/vivaui/viva/app"
 
 	"snaplite/internal/annotate"
+	"snaplite/internal/i18n"
 	sui "snaplite/internal/ui"
 )
 
@@ -19,13 +20,17 @@ func trayIcon() app.StatusIcon {
 }
 
 func (s *Shell) addTray() error {
-	tooltip := "简截"
-	if s.hotkeyProblem != "" {
-		tooltip = "简截 · " + s.hotkeyProblem
-	}
-	item, err := s.app.AddStatusItem(app.StatusItemConfig{Tooltip: tooltip, Icon: trayIcon(), Menu: s.menu})
+	item, err := s.app.AddStatusItem(app.StatusItemConfig{Tooltip: s.trayTooltip(), Icon: trayIcon(), Menu: s.menu})
 	s.tray = item
 	return err
+}
+
+// trayTooltip is the app's name, and the hotkey problem when there is one.
+func (s *Shell) trayTooltip() string {
+	if s.hotkeyProblem != "" {
+		return i18n.AppName() + " · " + s.hotkeyProblem
+	}
+	return i18n.AppName()
 }
 
 // withShortcut puts the shortcut text after a menu title; Viva's menus do not
@@ -44,17 +49,17 @@ func (s *Shell) menu() []app.MenuItem {
 		items = append(items, app.MenuItem{Title: s.hotkeyProblem, Disabled: true}, app.MenuItem{Separator: true})
 	}
 	items = append(items,
-		app.MenuItem{Title: withShortcut("截图", s.cfg.Hotkeys.Capture), Disabled: s.busy, OnSelect: s.StartCapture},
-		app.MenuItem{Title: withShortcut("剪切板历史", s.cfg.Hotkeys.History), OnSelect: func() { s.ShowHistory(app.StatusAnchor{}) }},
-		app.MenuItem{Title: "关闭全部钉图", Disabled: len(s.pins) == 0, OnSelect: s.CloseAllPins},
+		app.MenuItem{Title: withShortcut(i18n.T("截图", "Capture"), s.cfg.Hotkeys.Capture), Disabled: s.busy, OnSelect: s.StartCapture},
+		app.MenuItem{Title: withShortcut(i18n.T("剪切板历史", "Clipboard History"), s.cfg.Hotkeys.History), OnSelect: func() { s.ShowHistory(app.StatusAnchor{}) }},
+		app.MenuItem{Title: i18n.T("关闭全部钉图", "Close All Pins"), Disabled: len(s.pins) == 0, OnSelect: s.CloseAllPins},
 		app.MenuItem{Separator: true},
 	)
 	items = append(items, s.extraMenu()...)
 	items = append(items,
-		app.MenuItem{Title: "设置…", OnSelect: s.ShowSettings},
-		app.MenuItem{Title: "打开截图保存目录", OnSelect: s.OpenSaveDirectory},
+		app.MenuItem{Title: i18n.T("设置…", "Settings…"), OnSelect: s.ShowSettings},
+		app.MenuItem{Title: i18n.T("打开截图保存目录", "Open Screenshots Folder"), OnSelect: s.OpenSaveDirectory},
 		app.MenuItem{Separator: true},
-		app.MenuItem{Title: "退出简截", OnSelect: s.Quit},
+		app.MenuItem{Title: i18n.T("退出简截", "Quit SnapLite"), OnSelect: s.Quit},
 	)
 	return items
 }

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 
+	"snaplite/internal/i18n"
 	"snaplite/internal/platform"
 )
 
@@ -36,6 +37,9 @@ type Config struct {
 		Quality string `json:"quality"` // QualityPNG, QualityHigh, QualityMedium, QualityLow
 		Scale   string `json:"scale"`   // ScaleOriginal, Scale1x
 	} `json:"capture"`
+	// Language is the interface language: "" follows the system, "zh" or
+	// "en" (i18n.Setting*).
+	Language string `json:"language"`
 
 	path string
 }
@@ -360,7 +364,7 @@ func FormatHotkeyFor(goos string, h platform.Hotkey) string {
 		parts = append(parts, "Ctrl")
 	}
 	if h.Mods&platform.ModRightAlt != 0 {
-		parts = append(parts, "右Alt")
+		parts = append(parts, i18n.T("右Alt", "Right Alt"))
 	} else if h.Mods&platform.ModAlt != 0 {
 		parts = append(parts, "Alt")
 	}

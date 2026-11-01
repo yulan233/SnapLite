@@ -8,6 +8,7 @@ import (
 	"github.com/vivaui/viva/app"
 	vui "github.com/vivaui/viva/ui"
 
+	"snaplite/internal/annotate"
 	"snaplite/internal/capture"
 	"snaplite/internal/platform"
 	sui "snaplite/internal/ui"
@@ -417,5 +418,32 @@ func TestFrozenPictureIsBackdrop(t *testing.T) {
 	}
 	if len(r.canvas.Rectangles()) == 0 {
 		t.Fatal("no mask or selection rectangles")
+	}
+}
+
+func TestMosaicFromShortcut(t *testing.T) {
+	r := newRig(t)
+	r.drag(100, 100, 400, 300)
+	r.d.ShortcutChord(vui.ModifierMeta, '5')
+	if r.state().Doc.Tool != annotate.ToolMosaic {
+		t.Fatalf("tool = %v, want the mosaic", r.state().Doc.Tool)
+	}
+	if h, _ := r.hit(sui.ButtonID(sui.ActMosaic)); !h.Selected {
+		t.Fatal("the mosaic button shows as selected")
+	}
+	if _, ok := r.hitLabelled("红"); ok {
+		t.Fatal("the mosaic has no colours")
+	}
+	if _, ok := r.hitLabelled("粗"); !ok {
+		t.Fatal("the mosaic's widths are offered")
+	}
+	r.drag(150, 150, 250, 220)
+	shapes := r.state().Doc.Shapes
+	if len(shapes) != 1 || len(shapes[0].Cells) == 0 {
+		t.Fatalf("shapes = %+v", shapes)
+	}
+	// The rig's frame is at 2×: blocks are in image pixels.
+	if _, block := annotate.MosaicSize(r.state().Doc.Width, 2); shapes[0].Block != block {
+		t.Fatalf("block = %d, want %d", shapes[0].Block, block)
 	}
 }

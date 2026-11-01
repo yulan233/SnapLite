@@ -72,12 +72,12 @@ func winVirtualKey(key rune) (uint16, bool) {
 	return 0, false
 }
 
-// rightAltMatch decides whether a key press completes a right-Alt hotkey on
-// Windows. rightAlt and shift are the keys' current states; Control is not
-// compared because AltGr layouts report right Alt as Control+Alt.
-func rightAltMatch(h Hotkey, vk uint16, rightAlt, shift bool) bool {
-	want, ok := winVirtualKey(h.Key)
-	return ok && vk == want && rightAlt && shift == (h.Mods&ModShift != 0)
+// rightAltVariants are the hotkeys a right-Alt hotkey is registered as on
+// Windows: plain Alt, and Control+Alt for AltGr layouts, which report the
+// right Alt key as both. The handler then checks which Alt key is down.
+func rightAltVariants(h Hotkey) (alt, altGr Hotkey) {
+	alt = Hotkey{Mods: h.Mods&^ModRightAlt | ModAlt, Key: h.Key}
+	return alt, Hotkey{Mods: alt.Mods | ModCtrl, Key: h.Key}
 }
 
 // Win32 RegisterHotKey modifier flags.
@@ -220,6 +220,20 @@ func findMonitor(monitors []monitorGeometry, x, y float64) (monitorGeometry, boo
 		}
 	}
 	return monitorGeometry{}, false
+}
+
+// monitorForBounds returns the monitor a window with the given logical
+// bounds belongs on: the one whose logical bounds are exactly r (an overlay
+// covers its display), else the one containing r's centre. Logical bounds of
+// displays with different scales can overlap, so the exact match comes first.
+func monitorForBounds(monitors []monitorGeometry, r Rect) (monitorGeometry, bool) {
+	for _, m := range monitors {
+		l := m.logical()
+		if math.Abs(l.X-r.X) < 0.5 && math.Abs(l.Y-r.Y) < 0.5 && math.Abs(l.W-r.W) < 0.5 && math.Abs(l.H-r.H) < 0.5 {
+			return m, true
+		}
+	}
+	return findMonitor(monitors, r.X+r.W/2, r.Y+r.H/2)
 }
 
 // findMonitorPhysical returns the monitor whose physical bounds contain the point.

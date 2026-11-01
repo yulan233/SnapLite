@@ -7,6 +7,7 @@ import (
 	vui "github.com/vivaui/viva/ui"
 
 	"snaplite/internal/config"
+	"snaplite/internal/i18n"
 )
 
 func (r *settingsRig) openTab(i int) {
@@ -67,7 +68,7 @@ func TestSettingsCaptureTab(t *testing.T) {
 	r := newSettingsRig(t, "darwin", false)
 	r.openTab(tabCapture)
 	c := &r.host.Config().Capture
-	for _, want := range []string{"图片质量", "原图（PNG 无损）", "分辨率", "原始", "标准 1×", "截图保存目录", QualityNote} {
+	for _, want := range []string{"图片质量", "原图（PNG 无损）", "分辨率", "原始", "标准 1×", "截图保存目录", QualityNote()} {
 		if !r.text(want) {
 			t.Errorf("capture tab lacks %q", want)
 		}
@@ -109,8 +110,16 @@ func TestSettingsLeavingTabCancelsRecording(t *testing.T) {
 }
 
 func TestSettingsTabsFitWindow(t *testing.T) {
+	defer i18n.Set(i18n.Current())
+	for _, lang := range []i18n.Lang{i18n.Chinese, i18n.English} {
+		i18n.Set(lang)
+		testSettingsTabsFit(t, lang)
+	}
+}
+
+func testSettingsTabsFit(t *testing.T, lang i18n.Lang) {
 	for _, goos := range []string{"darwin", "windows"} {
-		for tab := range settingsTabLabels {
+		for tab := range settingsTabLabels() {
 			r := newSettingsRig(t, goos, false)
 			if tab != 0 {
 				r.openTab(tab)
@@ -121,14 +130,14 @@ func TestSettingsTabsFitWindow(t *testing.T) {
 			snap := r.d.Snapshot()
 			for _, h := range snap.Hits {
 				if h.Bounds.Y+h.Bounds.Height > float32(snap.Height) || h.Bounds.X+h.Bounds.Width > float32(snap.Width) {
-					t.Errorf("%s tab %d: %q at %+v spills out of %dx%d", goos, tab, h.Label, h.Bounds, snap.Width, snap.Height)
+					t.Errorf("lang %d %s tab %d: %q at %+v spills out of %dx%d", lang, goos, tab, h.Label, h.Bounds, snap.Width, snap.Height)
 				}
 			}
 			// Texts too, above the 完成 row: a note that runs under it is cut off.
 			done, _ := r.hitBounds(settingsDone)
 			for _, text := range snap.Texts {
-				if text.Value != "完成" && text.Value != "恢复默认" && text.Bounds.Y+text.Bounds.Height > done.Y {
-					t.Errorf("%s tab %d: text %q at %+v runs under the buttons at %v", goos, tab, text.Value, text.Bounds, done.Y)
+				if text.Value != i18n.T("完成", "Done") && text.Value != i18n.T("恢复默认", "Restore Defaults") && text.Bounds.Y+text.Bounds.Height > done.Y {
+					t.Errorf("lang %d %s tab %d: text %q at %+v runs under the buttons at %v", lang, goos, tab, text.Value, text.Bounds, done.Y)
 				}
 			}
 		}
@@ -142,4 +151,20 @@ func (r *settingsRig) hitBounds(id vui.ID) (vui.Rect, bool) {
 		}
 	}
 	return vui.Rect{}, false
+}
+
+func TestSettingsLanguageSwitch(t *testing.T) {
+	defer i18n.Set(i18n.Current())
+	i18n.Set(i18n.Chinese)
+	r := newSettingsRig(t, "windows", false)
+	r.openTab(tabGeneral)
+	r.click(settingsLanguage.At(len(i18n.Settings))) // the trigger opens the list
+	r.click(settingsLanguage.At(2))
+	if got := r.host.Config().Language; got != i18n.SettingEnglish || i18n.Current() != i18n.English {
+		t.Fatalf("language = %q, current %v", got, i18n.Current())
+	}
+	r.openTab(tabGeneral) // repaints
+	if !r.text("Language") || !r.text("Launch SnapLite at login") || r.text("语言") {
+		t.Fatal("the window is not in English after switching")
+	}
 }

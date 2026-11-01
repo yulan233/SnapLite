@@ -264,6 +264,9 @@ func SetLaunchAtLogin(enabled bool) error {
 
 func LaunchAtLogin() bool { return C.sl_launch_at_login() == 1 }
 
+// PrefersChinese reports whether the user's first preferred language is Chinese.
+func PrefersChinese() bool { return C.sl_prefers_chinese() == 1 }
+
 // RightAltDown is false: macOS hotkeys do not distinguish the Option keys.
 func RightAltDown() bool { return false }
 

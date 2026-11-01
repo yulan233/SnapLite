@@ -14,6 +14,7 @@ const (
 	ToolEllipse
 	ToolArrow
 	ToolPen
+	ToolMosaic
 )
 
 // Color is a straight-alpha 8-bit colour.
@@ -38,8 +39,11 @@ type Shape struct {
 	Color Color
 	Width float32
 	// Points are [start, end] for rectangles, ellipses and arrows, and the
-	// smoothed samples of a pen stroke.
+	// smoothed samples of a pen or mosaic stroke.
 	Points []image.Point
+	// Block is a mosaic's block side in image pixels, and Cells its blocks.
+	Block int
+	Cells []Cell
 }
 
 // Document is the annotations of one image and their undo history.
@@ -51,7 +55,13 @@ type Document struct {
 	Tool  Tool
 	Color Color
 	Width float32
+	// Source is the picture the shapes are drawn on, which mosaic blocks
+	// average; Scale is its image pixels per logical pixel.
+	Source *image.RGBA
+	Scale  float64
 
+	// mosaic paints the draft while it is a mosaic stroke.
+	mosaic *mosaicBrush
 	// paths caches each committed shape's screen geometry, parallel to
 	// Shapes; redoPaths is parallel to redo.
 	paths     []shapePath
@@ -80,8 +90,15 @@ func (d *Document) Begin(p image.Point) {
 		d.Color = Palette[0]
 	}
 	d.Draft = &Shape{Tool: d.Tool, Color: d.Color, Width: d.Width, Points: []image.Point{p, p}}
-	if d.Tool == ToolPen {
+	switch d.Tool {
+	case ToolPen:
 		d.Draft.Points = d.Draft.Points[:1]
+	case ToolMosaic:
+		d.Draft.Points = d.Draft.Points[:1]
+		diameter, block := MosaicSize(d.Width, d.Scale)
+		d.Draft.Block = block
+		d.mosaic = &mosaicBrush{src: d.Source, radius: diameter / 2, block: block, seen: map[image.Point]bool{}}
+		d.mosaic.stamp(d.Draft, p, p)
 	}
 }
 
@@ -92,12 +109,15 @@ func (d *Document) Extend(p image.Point, shift bool) {
 	if s == nil {
 		return
 	}
-	if s.Tool == ToolPen {
+	if s.Tool == ToolPen || s.Tool == ToolMosaic {
 		last := s.Points[len(s.Points)-1]
 		if math.Hypot(float64(p.X-last.X), float64(p.Y-last.Y)) < minPenStep {
 			return
 		}
 		s.Points = append(s.Points, p)
+		if s.Tool == ToolMosaic && d.mosaic != nil {
+			d.mosaic.stamp(s, last, p)
+		}
 		return
 	}
 	if shift {
@@ -107,7 +127,11 @@ func (d *Document) Extend(p image.Point, shift bool) {
 }
 
 // tooSmall reports whether a shape is too small to keep (under 3 pixels).
+// A mosaic is kept as long as it covers a block: a click is a dab.
 func tooSmall(s *Shape) bool {
+	if s.Tool == ToolMosaic {
+		return len(s.Cells) == 0
+	}
 	minX, minY, maxX, maxY := s.Points[0].X, s.Points[0].Y, s.Points[0].X, s.Points[0].Y
 	for _, p := range s.Points {
 		minX, maxX = min(minX, p.X), max(maxX, p.X)
@@ -120,7 +144,7 @@ func tooSmall(s *Shape) bool {
 // It reports whether a shape was added.
 func (d *Document) Commit() bool {
 	s := d.Draft
-	d.Draft = nil
+	d.Draft, d.mosaic = nil, nil
 	if s == nil || tooSmall(s) {
 		return false
 	}
@@ -134,7 +158,7 @@ func (d *Document) Commit() bool {
 // CancelDraft drops the stroke being drawn and reports whether there was one.
 func (d *Document) CancelDraft() bool {
 	had := d.Draft != nil
-	d.Draft = nil
+	d.Draft, d.mosaic = nil, nil
 	return had
 }
 
@@ -179,6 +203,7 @@ func (d *Document) Snapshot() []Shape {
 	out := make([]Shape, len(d.Shapes))
 	for i, s := range d.Shapes {
 		s.Points = append([]image.Point(nil), s.Points...)
+		s.Cells = append([]Cell(nil), s.Cells...)
 		out[i] = s
 	}
 	return out

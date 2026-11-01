@@ -238,3 +238,25 @@ func TestDownscaleAverages(t *testing.T) {
 		t.Fatalf("Shrink never enlarges and keeps at least one pixel: %v", b)
 	}
 }
+
+func TestComposeMosaicUnderStrokes(t *testing.T) {
+	base := gray(60, 60)
+	grey := annotate.Color{R: 10, G: 20, B: 30, A: 255}
+	mosaic := annotate.Shape{Tool: annotate.ToolMosaic, Block: 10, Cells: []annotate.Cell{{X: 10, Y: 10, Color: grey}}}
+	pen := annotate.Shape{Tool: annotate.ToolPen, Color: red, Width: 4, Points: []image.Point{{0, 15}, {60, 15}}}
+	// The pen comes first, yet the mosaic must not cover it.
+	out := ComposeOffset(base, []annotate.Shape{pen, mosaic}, image.Point{})
+	if c := at(out, 12, 12); c != (color.RGBA{10, 20, 30, 255}) {
+		t.Fatalf("mosaic block: %v", c)
+	}
+	if !isRed(at(out, 15, 15)) {
+		t.Fatalf("the pen is under the mosaic: %v", at(out, 15, 15))
+	}
+	if !isBase(at(out, 25, 25)) || !isBase(at(out, 5, 5)) {
+		t.Fatal("the mosaic spills out of its block")
+	}
+	shifted := ComposeOffset(base, []annotate.Shape{mosaic}, image.Point{X: 5, Y: 5})
+	if c := at(shifted, 5, 5); c != (color.RGBA{10, 20, 30, 255}) || !isBase(at(shifted, 4, 4)) {
+		t.Fatal("the mosaic ignores the crop's origin")
+	}
+}

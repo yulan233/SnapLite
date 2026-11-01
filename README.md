@@ -1,92 +1,108 @@
-# 简截 SnapLite
+# SnapLite (简截)
 
-常驻托盘 / 菜单栏的轻量截图工具，Windows 与 macOS 通用。Go 编写，界面用 [Viva](https://github.com/vivaui/viva) v0.2.1（GPU 原生，无 WebView）。
-需求、设计与实现说明见 [docs/](docs/README.md)。
+English | [中文](README.zh-CN.md)
 
-## 功能
+A lightweight screenshot tool that lives in the Windows tray and the macOS menu bar. Written in Go, with its interface in [Viva](https://github.com/vivaui/viva) v0.2.1 (native GPU rendering, no WebView).
+Requirements, design and implementation notes are in [docs/](docs/README.md) (Chinese).
 
-- **区域截图**：冻结所有显示器画面，框选区域（支持窗口吸附、8 倍放大镜），完成后复制到剪切板，或保存为 PNG / JPEG。
-- **钉图**：截图工具栏「钉住」把截图钉在选区原位；剪切板历史里的图片和文字也能钉到桌面。钉图浮在其他窗口之上、不抢焦点，可拖动，双击关闭，右键可复制、保存、取消钉住；托盘「关闭全部钉图」。钉图不保存，退出即关闭。
-- **截图质量**：设置 › 截图 可选 原图（PNG 无损）/ 高 / 中 / 低（JPEG 92% / 80% / 60%），只影响保存的文件，复制到剪切板始终是无损 PNG；分辨率可选“标准 1×”，把高分屏截图缩小到逻辑尺寸。
-- 长截图已于 2026-11-01 取消。
-- **标注**：矩形、椭圆、箭头、画笔；六种颜色、三档粗细；撤销 / 重做；`Shift` 约束为正方形 / 正圆 / 45°。
-- **剪切板历史**：记录最近 100 条图片和文字（去重、500 MB 上限、重启保留），密码管理器标记为隐藏的内容不记录；面板可搜索、键盘操作；点击条目复制，「粘贴」按钮、`⌘↵` 或 `⌘1–9` 直接粘贴到之前的应用（macOS 需辅助功能权限）；右键某一行可 复制 / 粘贴 / 钉到桌面 / 保存到本地… / 删除。
+## Features
 
-## 快捷键
+- **Region capture**: freezes every display, lets you select an area (with window snapping and an 8× magnifier), then copies it to the clipboard or saves it as PNG / JPEG. With several displays at different scales (say a 100% primary and a 125% secondary) every display is captured edge to edge in its own physical pixels.
+- **Pins**: the toolbar's Pin button pins the screenshot where it was taken; images and text from the clipboard history can be pinned too. Pins float above other windows without taking focus, can be dragged, close on double-click, and offer Copy, Save As… and Unpin on right-click; the tray's Close All Pins closes them all. Pins are not saved and close when SnapLite quits.
+- **Capture quality**: Settings › Capture offers Original (lossless PNG) / High / Medium / Low (JPEG 92% / 80% / 60%). It only affects saved files: the clipboard always gets lossless PNG. Resolution can be set to “Standard 1×”, which shrinks high-DPI screenshots to their logical size.
+- **Annotations**: rectangle, ellipse, arrow, pen and mosaic; six colours, three widths; undo / redo; `Shift` constrains to a square / circle / 45°.
+- **Mosaic**: drag to paint over what should not be seen; the painted area turns into blocks, each the average colour of the original picture under it. The three widths set the brush and block sizes. Mosaics always sit under the other annotations, and what you see is what gets exported.
+- **Clipboard history**: keeps the latest 100 images and texts (deduplicated, 500 MB cap, kept across restarts) and skips what password managers mark as concealed. The panel is searchable and keyboard driven: clicking an item copies it, and the Paste button, `⌘↵` or `⌘1–9` paste straight into the previous app (macOS needs the Accessibility permission). Right-click a row to Copy / Paste / Pin to Desktop / Save As… / Delete.
+- **Interface language**: Chinese or English, in Settings › General › Language. It follows the system by default and switches immediately.
+- Long screenshots were removed on 2026-11-01.
 
-| 操作 | macOS | Windows |
+## Shortcuts
+
+| Action | macOS | Windows |
 | --- | --- | --- |
-| 截图 | `⌥F1` | `右Alt+F1` |
-| 剪切板历史 | `⌥F2` | `右Alt+F2` |
+| Capture | `⌥F1` | `Right Alt+F1` |
+| Clipboard history | `⌥F2` | `Right Alt+F2` |
+| Done (copy) | `Enter` / double-click the selection / `⌘C` | `Enter` / double-click the selection / `Ctrl+C` |
+| Save | `⌘S` | `Ctrl+S` |
+| Exit capture / cancel the stroke being drawn | `Esc` / right-click | `Esc` / right-click |
+| Undo / redo | `⌘Z` / `⌘⇧Z` | `Ctrl+Z` / `Ctrl+Y`, `Ctrl+Shift+Z` |
+| Pick rectangle / ellipse / arrow / pen / mosaic | `⌘1`–`⌘5` | `Ctrl+1`–`Ctrl+5` |
+| Copy the colour under the magnifier | `⌘⇧C` | `Ctrl+Shift+C` |
+| Nudge the selection | arrow keys (`Shift`: 10 px) | same |
+| Close a pin | double-click / `Esc` (while it has focus) | same |
 
-Mac 键盘上 F1–F2 默认是媒体键：按 `⌥ fn F1`，或在 系统设置 › 键盘 › 键盘快捷键 › 功能键 中打开“将 F1、F2 等键用作标准功能键”。Windows 只认右 Alt。
-| 完成（复制） | `Enter` / 双击选区 / `⌘C` | `Enter` / 双击选区 / `Ctrl+C` |
-| 保存 | `⌘S` | `Ctrl+S` |
-| 退出截图 / 取消正在画的一笔 | `Esc` / 右键 | `Esc` / 右键 |
-| 撤销 / 重做 | `⌘Z` / `⌘⇧Z` | `Ctrl+Z` / `Ctrl+Y`、`Ctrl+Shift+Z` |
-| 选工具 矩形/椭圆/箭头/画笔 | `⌘1`–`⌘4` | `Ctrl+1`–`Ctrl+4` |
-| 复制放大镜下的颜色 | `⌘⇧C` | `Ctrl+Shift+C` |
-| 微调选区 | 方向键（`Shift` 10px） | 同左 |
-| 关闭钉图 | 双击 / `Esc`（钉图有焦点时） | 同左 |
+On a Mac keyboard F1–F2 are media keys by default: press `⌥ fn F1`, or turn on “Use F1, F2, etc. keys as standard function keys” in System Settings › Keyboard › Keyboard Shortcuts › Function Keys.
 
-全局快捷键可在配置文件里修改（见下）。
+On Windows only the right Alt key works. SnapLite registers Alt+F1 and checks that the right Alt key is the one held when it fires (AltGr layouts also get Ctrl+Alt+F1). While SnapLite runs, left Alt+F1 is therefore taken too and does nothing. This avoids a global keyboard hook (see “Antivirus false positives” below). The global hotkeys can be changed in Settings › Hotkeys or in the config file.
 
-## 构建
+## Building
 
-需要 Go 1.26+。macOS 需要 Xcode Command Line Tools（平台层用 cgo + Objective-C）；Windows 版是纯 Go，可在 macOS 上交叉编译。
+Needs Go 1.26+. macOS needs the Xcode Command Line Tools (the platform layer is cgo + Objective-C); the Windows build is pure Go and cross-compiles from macOS.
 
 ```bash
-go build -o build/snaplite ./cmd/snaplite                                  # 本机
+go build -o build/snaplite ./cmd/snaplite                                  # this machine
 GOOS=windows GOARCH=amd64 go build -o build/snaplite.exe ./cmd/snaplite    # Windows x64
 GOOS=windows GOARCH=arm64 go build -o build/snaplite-arm64.exe ./cmd/snaplite
 
-./scripts/package-mac.sh                                                    # build/简截.app（LSUIElement、屏幕录制说明、ad-hoc 签名）
-./scripts/package-mac.sh amd64                                              # Intel Mac 版（在 Apple 芯片上交叉编译）
+./scripts/setup-mac-signing.sh                                              # once per Mac: a local signing certificate (see Permissions)
+./scripts/package-mac.sh                                                    # build/简截.app (LSUIElement, screen-recording text, signed)
+./scripts/package-mac.sh amd64                                              # Intel Mac build (cross-compiled on Apple silicon)
 go run github.com/vivaui/viva/cmd/viva@v0.2.1 package -target windows -arch amd64 -format zip -o build/windows
-go run ./cmd/genicon/main.go                                                # 重新生成 assets/icon.png、tray-template.png
-go build -tags probe -o build/platform-probe ./cmd/platform-probe           # 平台层真机探针（会触发权限弹窗）
+go run ./cmd/genicon/main.go                                                # regenerate assets/icon.png and tray-template.png
+go build -tags probe -o build/platform-probe ./cmd/platform-probe           # platform-layer probe for real hardware (triggers permission prompts)
 ```
 
-测试（不打开任何窗口，UI 用 Viva 的 `app.Driver` 验证）：
+Tests (no window opens; the UI is checked with Viva's `app.Driver`):
 
 ```bash
 gofmt -l . && go vet ./... && go test ./... -count=1
 GOOS=windows GOARCH=amd64 go vet ./... && GOOS=windows GOARCH=arm64 go build ./...
 ```
 
-## 发布
+## Releasing
 
-推送 `v` 开头的标签后，[`.github/workflows/release.yml`](.github/workflows/release.yml) 在 macOS runner 上跑测试，把标签号写进 `viva.toml` 的版本号，打出 macOS（arm64 / x64）与 Windows（x64 / arm64）四个 zip，并创建 GitHub Release（发布说明按提交自动生成）：
+Pushing a tag that starts with `v` runs [`.github/workflows/release.yml`](.github/workflows/release.yml) on a macOS runner: it runs the tests, writes the tag into `viva.toml`'s version, builds four zips (macOS arm64 / x64, Windows x64 / arm64) and creates a GitHub Release with generated notes:
 
 ```bash
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-发布包没有正式签名：macOS 下载后需右键「打开」或执行 `xattr -dr com.apple.quarantine 简截.app`，Windows 会有 SmartScreen 提示。以后要签名时，`viva package` 会读取环境变量（`APPLE_CERTIFICATE`、`APPLE_ID` 等用于签名与公证，`WINDOWS_CERTIFICATE` 等用于 Windows 签名，见 `viva help package`），放进仓库 Secrets；macOS 还需去掉 `scripts/package-mac.sh` 里的 `-no-sign` 和 ad-hoc 签名，并在 `codesign` 后再签名公证。
+Release builds are not properly signed: on macOS right-click › Open the downloaded app or run `xattr -dr com.apple.quarantine 简截.app`; Windows shows a SmartScreen prompt. For real signing, `viva package` reads environment variables (`APPLE_CERTIFICATE`, `APPLE_ID` and so on for signing and notarization, `WINDOWS_CERTIFICATE` and so on for Windows; see `viva help package`) that can go into the repository's secrets; `scripts/package-mac.sh` also signs with the identity named by `SNAPLITE_SIGN_IDENTITY`.
 
-## 权限（macOS）
+## Permissions (macOS)
 
-- **屏幕录制**：首次截图时系统会询问；拒绝后简截会弹出说明窗口，可一键打开「系统设置 › 隐私与安全性 › 屏幕录制」。授权后需重启简截。权限绑定代码签名，开发期每次重新构建可能需要重新授权。
-- **辅助功能**：只有剪切板历史的“粘贴到之前的应用”需要。未授权时内容仍会复制，并弹出系统授权提示。
-- 打包后的 `.app` 设置了 `LSUIElement`，不显示 Dock 图标；直接运行 `build/snaplite` 时由程序把激活策略改为 Accessory。
+- **Screen Recording**: macOS asks on the first capture. If it is denied, SnapLite explains and can open System Settings › Privacy & Security › Screen Recording. Restart SnapLite after granting it.
+  macOS ties this permission to the code signature, and an ad hoc signature changes with every build, so each repackage used to need the permission granted again. Run `./scripts/setup-mac-signing.sh` once on your Mac: it creates the self-signed certificate “SnapLite Local Signing” in the login keychain and trusts it for code signing (macOS asks for your password once). `package-mac.sh` then signs with it, so one grant survives every rebuild. CI release builds are still signed ad hoc and need the permission again after an upgrade.
+- **Accessibility**: only needed by the clipboard history's “paste into the previous app”. Without it the item is still copied, and macOS shows its permission prompt.
+- The packaged `.app` sets `LSUIElement`, so it has no Dock icon; when `build/snaplite` runs bare, the program switches its activation policy to Accessory.
 
-Windows 不需要额外权限；无法向以管理员身份运行的窗口模拟粘贴（UIPI），此时内容只复制。
+Windows needs no extra permissions. Pasting into a window that runs as administrator is not possible (UIPI); the item is only copied then.
 
-## 配置与数据
+## Antivirus false positives (Windows)
 
-数据目录：macOS `~/Library/Application Support/SnapLite`，Windows `%APPDATA%\SnapLite`。
+Screen capture, clipboard reading, synthetic key presses and launch at login, in an unsigned program, is what heuristic engines take for a keylogger; 360 reported SnapLite as `Trojan.Generic`. What has been done:
 
-- `config.json`：首次启动写出默认值。可改快捷键（如 `"Option+F1"`、`"RightAlt+F1"`、`"CmdOrCtrl+Shift+A"`，按键支持字母、数字、F1–F12；旧版本写入的默认值——包括剪切板历史原来的 `Option+F3` / `RightAlt+F3`——会自动换成新默认值）、`saveDir`、历史条数 / 字节上限、是否记录文本、点击历史条目的动作（`history.clickAction`：`copy` / `paste`）、截图质量（`capture.quality`：`png` / `high` / `medium` / `low`）与分辨率（`capture.scale`：`original` / `1x`）。旧版的 `longshot` 字段会在下次保存时消失。这些大多也能在托盘「设置…」里改。
-- `history/`：`index.json` 与图片 PNG。
-- `snaplite.log`：错误与崩溃日志（保留约 1 MB）。
+- The global low-level keyboard hook (`SetWindowsHookEx(WH_KEYBOARD_LL)`) is gone; the right-Alt hotkeys use `RegisterHotKey`.
+- The exe carries version information (company, description, version, icon); see `[windows]` in `viva.toml`.
 
-## 已知限制
+The lasting fix is an Authenticode code-signing certificate for the exe, and submitting the signed build to 360's developer platform (open.soft.360.cn) for whitelisting / a false-positive report.
 
-- 真实窗口行为（遮罩置顶与覆盖菜单栏/任务栏、立即获得键盘焦点、多显示器与混合缩放、权限弹窗、Windows 真机）只在 `app.Driver` 和交叉编译层面验证过，需按 [docs/07](docs/07-测试与验收.md) §3 真机验收。
-- Viva v0.2.1 的保存对话框不能指定初始目录，对话框打开在系统记住的目录。
-- Viva 不把无修饰键的字母/数字交给非文本窗口，所以选工具与复制颜色用 `⌘/Ctrl` 组合键（见上表）。
-- Windows 上历史面板搜索框获得焦点时 ↑↓ 移动光标（Viva 的 `NavigationKeys` 目前只在 macOS 实现），可按 `Tab` 把焦点移到列表。
-- macOS 没有剪切板变化通知，历史记录用 800 ms 的低频定时器检查（唯一的常驻定时器）；Windows 是事件驱动。
-- 工具栏出现时的 120 ms 渐显未实现（直接出现）。
-- 钉图的置顶、拖动、双击与右键菜单只在 `app.Driver` 下验证过，需真机验收；macOS 上点击钉图会激活简截（这样钉图才能收到 `Esc`）。
-- 跨显示器选区、录屏、OCR、长截图等不在本期范围。
+## Configuration and data
+
+Data directory: `~/Library/Application Support/SnapLite` on macOS, `%APPDATA%\SnapLite` on Windows.
+
+- `config.json`: written with the defaults on first launch. It holds the hotkeys (such as `"Option+F1"`, `"RightAlt+F1"`, `"CmdOrCtrl+Shift+A"`; keys are letters, digits and F1–F12; defaults written by older versions, including the clipboard history's former `Option+F3` / `RightAlt+F3`, are replaced with the new defaults), `saveDir`, the history's item and byte limits, whether text is recorded, what clicking a history item does (`history.clickAction`: `copy` / `paste`), the capture quality (`capture.quality`: `png` / `high` / `medium` / `low`), the resolution (`capture.scale`: `original` / `1x`) and the interface language (`language`: empty follows the system, `zh` / `en`). The old `longshot` field disappears on the next save. Most of these can also be changed in the tray's Settings….
+- `history/`: `index.json` and the images as PNG.
+- `snaplite.log`: errors and crash logs (about 1 MB is kept).
+
+## Known limitations
+
+- Real window behaviour (the overlay staying on top and covering the menu bar / taskbar, getting keyboard focus at once, several displays at mixed scales, permission prompts, real Windows machines) is only verified through `app.Driver` and cross-compilation; check it on hardware following [docs/07](docs/07-测试与验收.md) §3.
+- Viva v0.2.1's save dialog cannot set an initial folder, so it opens where the system remembers.
+- Viva does not give unmodified letters and digits to non-text windows, so picking tools and copying colours use `⌘/Ctrl` chords (see the table).
+- On Windows ↑↓ move the caret while the history panel's search box has focus (Viva's `NavigationKeys` is macOS-only for now); `Tab` moves focus to the list.
+- macOS has no clipboard change notification, so the history checks with a slow 800 ms timer (the only standing timer); Windows is event driven.
+- The toolbar's 120 ms fade-in is not implemented (it appears at once).
+- Pins staying on top, dragging, double-clicking and the right-click menu are only verified through `app.Driver`; on macOS clicking a pin activates SnapLite (so the pin can receive `Esc`).
+- After switching the language, open windows keep their old title until they are opened again.
+- Selections across displays, screen recording, OCR and long screenshots are out of scope.

@@ -130,7 +130,8 @@ func style(s Shape, zoom float32) vui.PathStyle {
 
 // Draw paints the committed shapes and the draft, clipped to clip. Committed
 // shapes use their cached paths; only the draft is rebuilt each paint, in
-// the canvas's shared builder.
+// the canvas's shared builder. Mosaics go first, under every other shape,
+// as the rasterizer composes them.
 func Draw(canvas *vui.Canvas, d *Document, clip vui.Rect, view View) {
 	if len(d.Shapes) == 0 && d.Draft == nil {
 		return
@@ -138,17 +139,37 @@ func Draw(canvas *vui.Canvas, d *Document, clip vui.Rect, view View) {
 	bounds := view.bounds()
 	canvas.Clip(clip)
 	for i := range d.Shapes {
+		if d.Shapes[i].Tool == ToolMosaic {
+			drawMosaic(canvas, &d.Shapes[i], view)
+		}
+	}
+	if s := d.Draft; s != nil && s.Tool == ToolMosaic {
+		drawMosaic(canvas, s, view)
+	}
+	for i := range d.Shapes {
 		s := d.Shapes[i]
+		if s.Tool == ToolMosaic {
+			continue
+		}
 		sp := d.paths[i]
 		canvas.DrawPath(sp.stroke, bounds, style(s, view.Zoom))
 		if s.Tool == ToolArrow {
 			canvas.DrawPath(sp.head, bounds, vui.PathStyle{Fill: ToColor(s.Color)})
 		}
 	}
-	if s := d.Draft; s != nil {
+	if s := d.Draft; s != nil && s.Tool != ToolMosaic {
 		drawDraft(canvas, *s, bounds, view.Zoom)
 	}
 	canvas.Unclip()
+}
+
+// drawMosaic fills a mosaic's blocks.
+func drawMosaic(canvas *vui.Canvas, s *Shape, view View) {
+	side := float32(s.Block) * view.Zoom
+	for _, c := range s.Cells {
+		o := view.ToWindow(image.Point{X: c.X, Y: c.Y})
+		canvas.Fill(vui.Rect{X: o.X, Y: o.Y, Width: side, Height: side}, ToColor(c.Color))
+	}
 }
 
 func drawDraft(canvas *vui.Canvas, s Shape, bounds vui.Rect, zoom float32) {

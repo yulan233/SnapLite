@@ -52,3 +52,5 @@ int sl_set_launch_at_login(int enabled);
 
 void sl_save_front_app(void);
 int sl_paste_to_saved_app(void);
+
+int sl_prefers_chinese(void);

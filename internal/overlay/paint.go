@@ -4,6 +4,7 @@ import (
 	vui "github.com/vivaui/viva/ui"
 
 	"snaplite/internal/annotate"
+	"snaplite/internal/i18n"
 	sui "snaplite/internal/ui"
 )
 
@@ -24,7 +25,7 @@ func (c *Controller) paint(i int, canvas *vui.Canvas, size vui.Size) {
 	bm := st.Frame.Bitmap
 	canvas.DrawBackdrop(bm, vui.Rect{Width: float32(bm.Width), Height: float32(bm.Height)}, bounds)
 	cursor := vui.PointerCursorCrosshair
-	canvas.HitWithOptions(surfaceID, bounds, "截图区域", vui.HitOptions{Cursor: cursor, SkipFocus: true})
+	canvas.HitWithOptions(surfaceID, bounds, i18n.T("截图区域", "Capture area"), vui.HitOptions{Cursor: cursor, SkipFocus: true})
 
 	// 2. The mask, as the four rectangles around the hole.
 	hole, hasHole := st.Sel, !empty(st.Sel) && st.Phase != PhaseIdle
@@ -87,14 +88,14 @@ func (c *Controller) paintSelection(canvas *vui.Canvas, st *State, t sui.Tokens)
 		selCursor = vui.PointerCursorCrosshair
 	}
 	if st.Phase == PhaseEditing {
-		canvas.HitWithOptions(selectionID, sel, "选区", vui.HitOptions{Cursor: selCursor, SkipFocus: true})
+		canvas.HitWithOptions(selectionID, sel, i18n.T("选区", "Selection"), vui.HitOptions{Cursor: selCursor, SkipFocus: true})
 	}
 	strokeRect(canvas, sel, 1, t.Accent)
 	for h, p := range handlePoints(sel) {
 		r := vui.Rect{X: p.X - sui.HandleSize/2, Y: p.Y - sui.HandleSize/2, Width: sui.HandleSize, Height: sui.HandleSize}
 		canvas.Border(r, 1, t.Accent, white)
 		if st.Phase == PhaseEditing {
-			canvas.HitWithOptions(handleScope.At(h), handleRect(p), "调整选区", vui.HitOptions{Cursor: handleCursor(h), SkipFocus: true})
+			canvas.HitWithOptions(handleScope.At(h), handleRect(p), i18n.T("调整选区", "Resize selection"), vui.HitOptions{Cursor: handleCursor(h), SkipFocus: true})
 		}
 	}
 	style := vui.TextStyle{Size: sui.LabelTextSize, Weight: vui.WeightMedium, Color: white}
@@ -119,13 +120,14 @@ func (c *Controller) paintToolbar(canvas *vui.Canvas, st *State, t sui.Tokens, s
 	if st.Doc.Tool == annotate.ToolNone {
 		return
 	}
-	props := sui.PropsSize()
+	colors := st.Doc.Tool != annotate.ToolMosaic
+	props := sui.PropsSize(colors)
 	px := min(max(r.X+r.Width-props.Width, 0), max(size.Width-props.Width, 0))
 	py := r.Y + r.Height + sui.PropsGap
 	if place == PlaceAbove {
 		py = r.Y - sui.PropsGap - props.Height
 	}
-	sui.DrawProps(canvas, t, st.Doc.Color, st.Doc.Width, vui.Point{X: px, Y: py})
+	sui.DrawProps(canvas, t, st.Doc.Color, st.Doc.Width, vui.Point{X: px, Y: py}, colors)
 	if ci, wi := sui.PropsClick(canvas); ci >= 0 || wi >= 0 {
 		canvas.AfterPaint(func() {
 			if ci >= 0 {
@@ -196,10 +198,10 @@ func (c *Controller) paintHint(canvas *vui.Canvas, st *State, t sui.Tokens, size
 	}
 	style := vui.TextStyle{Size: sui.ControlTextSz, Weight: vui.WeightMedium, Color: white}
 	style.Color.Alpha = alpha
-	w := canvas.TextWidthWeight(HintRegion, style.Size, style.Weight) + 32
+	w := canvas.TextWidthWeight(HintRegion(), style.Size, style.Weight) + 32
 	r := vui.Rect{X: (size.Width - w) / 2, Y: 24, Width: w, Height: 34}
 	bg := t.LabelBg
 	bg.Alpha *= alpha
 	canvas.Rounded(r, r.Height/2, bg)
-	canvas.LabelCenter(HintRegion, r, style)
+	canvas.LabelCenter(HintRegion(), r, style)
 }

@@ -4,6 +4,7 @@ import (
 	vui "github.com/vivaui/viva/ui"
 
 	"snaplite/internal/annotate"
+	"snaplite/internal/i18n"
 )
 
 // Tree is the identity tree every SnapLite window paints in. It is used only
@@ -30,6 +31,7 @@ const (
 	ActEllipse
 	ActArrow
 	ActPen
+	ActMosaic
 	ActUndo
 	ActRedo
 	ActPin
@@ -39,24 +41,27 @@ const (
 )
 
 type button struct {
-	act   Action
-	id    vui.ID
-	icon  Icon
-	label string
-	group int
+	act    Action
+	id     vui.ID
+	icon   Icon
+	zh, en string // the label
+	group  int
 }
 
+func (b button) label() string { return i18n.T(b.zh, b.en) }
+
 var buttons = [...]button{
-	{ActRect, Tree.ID(ToolbarScope, "rect"), IconRect, "矩形", 0},
-	{ActEllipse, Tree.ID(ToolbarScope, "ellipse"), IconEllipse, "椭圆", 0},
-	{ActArrow, Tree.ID(ToolbarScope, "arrow"), IconArrow, "箭头", 0},
-	{ActPen, Tree.ID(ToolbarScope, "pen"), IconPen, "画笔", 0},
-	{ActUndo, Tree.ID(ToolbarScope, "undo"), IconUndo, "撤销", 1},
-	{ActRedo, Tree.ID(ToolbarScope, "redo"), IconRedo, "重做", 1},
-	{ActPin, Tree.ID(ToolbarScope, "pin"), IconPin, "钉住", 2},
-	{ActSave, Tree.ID(ToolbarScope, "save"), IconSave, "保存", 3},
-	{ActCancel, Tree.ID(ToolbarScope, "cancel"), IconCancel, "取消", 3},
-	{ActDone, Tree.ID(ToolbarScope, "done"), IconDone, "完成", 3},
+	{ActRect, Tree.ID(ToolbarScope, "rect"), IconRect, "矩形", "Rectangle", 0},
+	{ActEllipse, Tree.ID(ToolbarScope, "ellipse"), IconEllipse, "椭圆", "Ellipse", 0},
+	{ActArrow, Tree.ID(ToolbarScope, "arrow"), IconArrow, "箭头", "Arrow", 0},
+	{ActPen, Tree.ID(ToolbarScope, "pen"), IconPen, "画笔", "Pen", 0},
+	{ActMosaic, Tree.ID(ToolbarScope, "mosaic"), IconMosaic, "马赛克", "Mosaic", 0},
+	{ActUndo, Tree.ID(ToolbarScope, "undo"), IconUndo, "撤销", "Undo", 1},
+	{ActRedo, Tree.ID(ToolbarScope, "redo"), IconRedo, "重做", "Redo", 1},
+	{ActPin, Tree.ID(ToolbarScope, "pin"), IconPin, "钉住", "Pin", 2},
+	{ActSave, Tree.ID(ToolbarScope, "save"), IconSave, "保存", "Save", 3},
+	{ActCancel, Tree.ID(ToolbarScope, "cancel"), IconCancel, "取消", "Cancel", 3},
+	{ActDone, Tree.ID(ToolbarScope, "done"), IconDone, "完成", "Done", 3},
 }
 
 // ButtonID returns the identity of an action's button.
@@ -80,6 +85,8 @@ func ToolAction(t annotate.Tool) Action {
 		return ActArrow
 	case annotate.ToolPen:
 		return ActPen
+	case annotate.ToolMosaic:
+		return ActMosaic
 	}
 	return ActNone
 }
@@ -95,6 +102,8 @@ func ActionTool(a Action) annotate.Tool {
 		return annotate.ToolArrow
 	case ActPen:
 		return annotate.ToolPen
+	case ActMosaic:
+		return annotate.ToolMosaic
 	}
 	return annotate.ToolNone
 }
@@ -113,7 +122,7 @@ type ToolbarSpec struct {
 
 func (s ToolbarSpec) shows(a Action) bool {
 	switch a {
-	case ActRect, ActEllipse, ActArrow, ActPen, ActUndo, ActRedo:
+	case ActRect, ActEllipse, ActArrow, ActPen, ActMosaic, ActUndo, ActRedo:
 		return s.Tools
 	case ActPin:
 		return s.Pin
@@ -167,7 +176,7 @@ func DrawToolbar(canvas *vui.Canvas, t Tokens, spec ToolbarSpec, origin vui.Poin
 	canvas.Elevate(bounds, RadiusSurface, vui.ShadowMD)
 	canvas.RoundedBorder(bounds, RadiusSurface, 1, t.SurfaceBorder, t.Surface)
 	// The surface itself blocks presses so they do not reach the page.
-	canvas.HitWithOptions(toolbarBack, bounds, "工具栏", vui.HitOptions{SkipFocus: true})
+	canvas.HitWithOptions(toolbarBack, bounds, i18n.T("工具栏", "Toolbar"), vui.HitOptions{SkipFocus: true})
 	hovered, focused := canvas.Hovered(), canvas.FocusVisible()
 	spec.layout(func(b button, r vui.Rect, divider float32) {
 		r = r.Offset(origin.X, origin.Y)
@@ -176,7 +185,8 @@ func DrawToolbar(canvas *vui.Canvas, t Tokens, spec ToolbarSpec, origin vui.Poin
 		}
 		disabled := (b.act == ActUndo && !spec.CanUndo) || (b.act == ActRedo && !spec.CanRedo)
 		selected := ActionTool(b.act) != annotate.ToolNone && ActionTool(b.act) == spec.Tool
-		canvas.HitWithOptions(b.id, r, b.label, vui.HitOptions{Disabled: disabled, Selected: selected, Hint: b.label})
+		label := b.label()
+		canvas.HitWithOptions(b.id, r, label, vui.HitOptions{Disabled: disabled, Selected: selected, Hint: label})
 		fg := t.Text
 		switch {
 		case b.act == ActDone:
@@ -221,41 +231,54 @@ func IsToolbar(id vui.ID) bool {
 	return !id.IsZero() && Tree.Within(id.Scope(), ToolbarScope)
 }
 
-// PropsSize is the property bar's size.
-func PropsSize() vui.Size {
-	w := 10 + float32(len(annotate.Palette))*SwatchSize + float32(len(annotate.Palette)-1)*8 + 10 + 1 + 6 + float32(len(annotate.Widths))*24 + 6
+// PropsSize is the property bar's size; without colours (the mosaic has
+// none) it holds only the widths.
+func PropsSize(colors bool) vui.Size {
+	w := 6 + float32(len(annotate.Widths))*24 + 6
+	if colors {
+		// The swatches, the divider and its gaps come before the widths.
+		w += 10 + float32(len(annotate.Palette))*SwatchSize + float32(len(annotate.Palette)-1)*8 + 10 + 1
+	}
 	return vui.Size{Width: w, Height: PropsHeight}
 }
 
 // widthDots are the dot diameters that stand for the three widths.
 var widthDots = [...]float32{4, 7, 11}
 
-// DrawProps paints the colour and width bar at origin.
-func DrawProps(canvas *vui.Canvas, t Tokens, color annotate.Color, width float32, origin vui.Point) vui.Rect {
-	size := PropsSize()
+// DrawProps paints the colour and width bar at origin, or only the widths
+// when colors is false.
+func DrawProps(canvas *vui.Canvas, t Tokens, color annotate.Color, width float32, origin vui.Point, colors bool) vui.Rect {
+	size := PropsSize(colors)
 	bounds := vui.Rect{X: origin.X, Y: origin.Y, Width: size.Width, Height: size.Height}
 	canvas.Elevate(bounds, RadiusSurface, vui.ShadowMD)
 	canvas.RoundedBorder(bounds, RadiusSurface, 1, t.SurfaceBorder, t.Surface)
-	canvas.HitWithOptions(propsBack, bounds, "属性", vui.HitOptions{SkipFocus: true})
+	canvas.HitWithOptions(propsBack, bounds, i18n.T("属性", "Properties"), vui.HitOptions{SkipFocus: true})
 	x := origin.X + 10
 	cy := origin.Y + PropsHeight/2
 	for i, c := range annotate.Palette {
+		if !colors {
+			break
+		}
 		r := vui.Rect{X: x, Y: cy - SwatchSize/2, Width: SwatchSize, Height: SwatchSize}
 		id := colorScope.At(i)
-		canvas.HitWithOptions(id, r.Inset(vui.All(-3)), colorNames[i], vui.HitOptions{Selected: c == color})
+		canvas.HitWithOptions(id, r.Inset(vui.All(-3)), i18n.T(colorNames[i][0], colorNames[i][1]), vui.HitOptions{Selected: c == color})
 		if c == color {
 			canvas.RoundedBorder(r.Inset(vui.All(-3)), SwatchSize/2+3, 2, t.Accent, vui.Color{})
 		}
 		canvas.RoundedBorder(r, SwatchSize/2, 1, t.SurfaceBorder, annotate.ToColor(c))
 		x += SwatchSize + 8
 	}
-	x += 2
-	canvas.Fill(vui.Rect{X: x, Y: cy - 10, Width: 1, Height: 20}, t.SurfaceBorder)
-	x += 7
+	if colors {
+		x += 2
+		canvas.Fill(vui.Rect{X: x, Y: cy - 10, Width: 1, Height: 20}, t.SurfaceBorder)
+		x += 7
+	} else {
+		x = origin.X + 6
+	}
 	for i, w := range annotate.Widths {
 		cell := vui.Rect{X: x, Y: cy - 12, Width: 24, Height: 24}
 		id := widthScope.At(i)
-		canvas.HitWithOptions(id, cell, widthNames[i], vui.HitOptions{Selected: w == width})
+		canvas.HitWithOptions(id, cell, i18n.T(widthNames[i][0], widthNames[i][1]), vui.HitOptions{Selected: w == width})
 		if w == width {
 			canvas.Rounded(cell, RadiusButton, t.Selected)
 		} else if canvas.Hovered() == id {
@@ -269,8 +292,8 @@ func DrawProps(canvas *vui.Canvas, t Tokens, color annotate.Color, width float32
 }
 
 var (
-	colorNames = [...]string{"红", "黄", "绿", "蓝", "黑", "白"}
-	widthNames = [...]string{"细", "中", "粗"}
+	colorNames = [...][2]string{{"红", "Red"}, {"黄", "Yellow"}, {"绿", "Green"}, {"蓝", "Blue"}, {"黑", "Black"}, {"白", "White"}}
+	widthNames = [...][2]string{{"细", "Thin"}, {"中", "Medium"}, {"粗", "Thick"}}
 )
 
 // PropsClick reports a click on a colour (index) or a width (index), -1 for none.

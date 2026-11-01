@@ -11,12 +11,18 @@ import (
 
 	"snaplite/internal/config"
 	"snaplite/internal/history"
+	"snaplite/internal/i18n"
 	"snaplite/internal/platform"
 	sui "snaplite/internal/ui"
 )
 
-// hotkeyNames are the two hotkeys in config.HotkeySpecs order.
-var hotkeyNames = [2]string{"截图", "剪切板历史"}
+// hotkeyName is one of the two hotkeys, in config.HotkeySpecs order.
+func hotkeyName(i int) string {
+	if i == 0 {
+		return i18n.T("截图", "Capture")
+	}
+	return i18n.T("剪切板历史", "Clipboard history")
+}
 
 var (
 	settingsFeature  = sui.Tree.Feature("settings")
@@ -35,6 +41,7 @@ var (
 	settingsOpenDir     = sui.Tree.ID(settingsFeature, "open-dir")
 	settingsQuality     = sui.Tree.Sub(settingsFeature, sui.Tree.Name("quality"))
 	settingsScale       = sui.Tree.Sub(settingsFeature, sui.Tree.Name("scale"))
+	settingsLanguage    = sui.Tree.Sub(settingsFeature, sui.Tree.Name("language"))
 )
 
 // Settings tabs.
@@ -45,13 +52,28 @@ const (
 	tabGeneral
 )
 
-var settingsTabLabels = []string{"快捷键", "截图", "剪切板", "通用"}
+func settingsTabLabels() []string {
+	return []string{i18n.T("快捷键", "Hotkeys"), i18n.T("截图", "Capture"), i18n.T("剪切板", "Clipboard"), i18n.T("通用", "General")}
+}
 
 // qualityLabels name config.Qualities in the settings window.
-var qualityLabels = []string{"原图（PNG 无损）", "高（JPEG 92%）", "中（JPEG 80%）", "低（JPEG 60%）"}
+func qualityLabels() []string {
+	return []string{
+		i18n.T("原图（PNG 无损）", "Original (lossless PNG)"), i18n.T("高（JPEG 92%）", "High (JPEG 92%)"),
+		i18n.T("中（JPEG 80%）", "Medium (JPEG 80%)"), i18n.T("低（JPEG 60%）", "Low (JPEG 60%)"),
+	}
+}
+
+// languageLabels name i18n.Settings. Each language is shown in itself.
+func languageLabels() []string {
+	return []string{i18n.T("跟随系统", "System"), "中文", "English"}
+}
 
 // QualityNote says what the quality setting does and does not change.
-const QualityNote = "质量只影响保存的文件；复制到剪切板始终是无损 PNG。"
+func QualityNote() string {
+	return i18n.T("质量只影响保存的文件；复制到剪切板始终是无损 PNG。",
+		"Quality only affects saved files; the clipboard always gets lossless PNG.")
+}
 
 // settingsHost is what the settings window asks of the shell. Every call runs
 // on the event-loop thread, and so do the done callbacks, possibly a loop turn later.
@@ -72,6 +94,8 @@ type settingsHost interface {
 	Config() *config.Config
 	ApplyHistory()
 	SaveConfig()
+	// SetLanguage switches the interface language and saves it.
+	SetLanguage(setting string)
 	LaunchAtLogin() bool
 	SetLaunchAtLogin(on bool) error
 	// AccessibilityGranted says whether pasting into other applications can
@@ -96,6 +120,7 @@ type settingsWindow struct {
 	itemsOpen   flex.SelectState
 	bytesOpen   flex.SelectState
 	qualityOpen flex.SelectState
+	langOpen    flex.SelectState
 	recording   int // the row being recorded, -1 for none
 	problems    [2]string
 	message     string
@@ -109,7 +134,7 @@ func newSettingsWindow(host settingsHost, tokens sui.Tokens, goos string, rightA
 
 func (w *settingsWindow) config() app.Config {
 	return app.Config{
-		Title: "简截 · 设置", Width: 480, Height: 460, Tree: &sui.Tree,
+		Title: i18n.T("简截 · 设置", "SnapLite · Settings"), Width: 480, Height: 460, Tree: &sui.Tree,
 		Paint:       w.paint,
 		OnKey:       w.key,
 		OnShortcut:  w.shortcut,
@@ -126,20 +151,22 @@ func (w *settingsWindow) config() app.Config {
 // settingsHint is the platform's note under the hotkey rows.
 func settingsHint(goos string) string {
 	if goos == "darwin" {
-		return "点击快捷键后按下新的组合，Esc 取消。Mac 键盘上的 F1–F12 默认是亮度、音量等功能键，录制和使用时要同时按住 fn，或在 系统设置 › 键盘 中设为标准功能键。"
+		return i18n.T("点击快捷键后按下新的组合，Esc 取消。Mac 键盘上的 F1–F12 默认是亮度、音量等功能键，录制和使用时要同时按住 fn，或在 系统设置 › 键盘 中设为标准功能键。",
+			"Click a hotkey, then press the new combination; Esc cancels. On a Mac keyboard F1–F12 control brightness, volume and so on by default: hold fn while recording and using them, or make them standard function keys in System Settings › Keyboard.")
 	}
-	return "点击快捷键后按下新的组合，Esc 取消。Alt 组合会区分左右 Alt。"
+	return i18n.T("点击快捷键后按下新的组合，Esc 取消。Alt 组合会区分左右 Alt。",
+		"Click a hotkey, then press the new combination; Esc cancels. Alt combinations tell the left and right Alt keys apart.")
 }
 
 // display is what row i's button says.
 func (w *settingsWindow) display(i int, spec string) string {
 	if w.recording == i {
-		return "请按下快捷键…"
+		return i18n.T("请按下快捷键…", "Press a hotkey…")
 	}
 	if text := hotkeyText(spec); text != "" {
 		return text
 	}
-	return spec + "（无效）"
+	return spec + i18n.T("（无效）", " (invalid)")
 }
 
 func (w *settingsWindow) paint(canvas *vui.Canvas, size vui.Size) {
@@ -148,7 +175,7 @@ func (w *settingsWindow) paint(canvas *vui.Canvas, size vui.Size) {
 	canvas.Fill(bounds, t.Surface)
 	w.view.Draw(canvas, t.VivaTheme(), bounds, func(f *flex.Frame) {
 		f.Column().Fill().Pad(24).Gap(16).Children(func() {
-			if i, ok := f.Tabs(settingsTabs, settingsTabLabels, w.tab).TabClicked(); ok && i != w.tab {
+			if i, ok := f.Tabs(settingsTabs, settingsTabLabels(), w.tab).TabClicked(); ok && i != w.tab {
 				canvas.AfterPaint(func() { w.switchTab(i) })
 			}
 			f.Column().Grow(1).Gap(14).Children(func() {
@@ -164,10 +191,10 @@ func (w *settingsWindow) paint(canvas *vui.Canvas, size vui.Size) {
 				}
 			})
 			f.Row().Gap(8).Justify(flex.End).Children(func() {
-				if w.tab == tabHotkeys && f.Button(settingsDefaults, "恢复默认").Outline().Clicked() {
+				if w.tab == tabHotkeys && f.Button(settingsDefaults, i18n.T("恢复默认", "Restore Defaults")).Outline().Clicked() {
 					canvas.AfterPaint(w.restoreDefaults)
 				}
-				if f.Button(settingsDone, "完成").Clicked() && w.close != nil {
+				if f.Button(settingsDone, i18n.T("完成", "Done")).Clicked() && w.close != nil {
 					canvas.AfterPaint(w.close)
 				}
 			})
@@ -197,9 +224,9 @@ func settingRow(f *flex.Frame, label string, control func()) {
 func (w *settingsWindow) paintHotkeys(f *flex.Frame, canvas *vui.Canvas) {
 	t := w.tokens
 	specs := w.host.HotkeySpecs()
-	for i := range hotkeyNames {
+	for i := range specs {
 		f.Row().Gap(12).Items(flex.Center).Children(func() {
-			f.Text(hotkeyNames[i]).Width(96)
+			f.Text(hotkeyName(i)).Width(120)
 			button := f.Button(settingsRows[i], w.display(i, specs[i])).Width(200)
 			if w.recording != i {
 				button = button.Outline()
@@ -208,7 +235,7 @@ func (w *settingsWindow) paintHotkeys(f *flex.Frame, canvas *vui.Canvas) {
 				canvas.AfterPaint(func() { w.toggle(i) })
 			}
 			if w.problems[i] != "" && w.recording != i {
-				f.Text("未生效").Color(t.Danger)
+				f.Text(i18n.T("未生效", "Not active")).Color(t.Danger)
 			}
 		})
 	}
@@ -243,28 +270,31 @@ func bytesLabel(n int64) string {
 func (w *settingsWindow) paintClipboard(f *flex.Frame, canvas *vui.Canvas) {
 	cfg := w.host.Config()
 	h := &cfg.History
-	settingRow(f, "记录剪切板历史", func() {
-		if f.Switch(settingsRecord, h.Enabled).Label("记录剪切板历史").Clicked() {
+	record := i18n.T("记录剪切板历史", "Record clipboard history")
+	settingRow(f, record, func() {
+		if f.Switch(settingsRecord, h.Enabled).Label(record).Clicked() {
 			canvas.AfterPaint(func() { h.Enabled = !h.Enabled; w.host.ApplyHistory() })
 		}
 	})
-	settingRow(f, "记录复制的文字", func() {
-		if f.Switch(settingsRecordText, h.RecordText).Label("记录复制的文字").Disabled(!h.Enabled).Clicked() {
+	recordText := i18n.T("记录复制的文字", "Record copied text")
+	settingRow(f, recordText, func() {
+		if f.Switch(settingsRecordText, h.RecordText).Label(recordText).Disabled(!h.Enabled).Clicked() {
 			canvas.AfterPaint(func() { h.RecordText = !h.RecordText; w.host.ApplyHistory() })
 		}
 	})
-	settingRow(f, "最多保存", func() {
+	settingRow(f, i18n.T("最多保存", "Keep at most"), func() {
+		items := i18n.T("%d 条", "%d items")
 		labels := make([]string, len(config.MaxItemsChoices))
 		for i, n := range config.MaxItemsChoices {
-			labels[i] = fmt.Sprintf("%d 条", n)
+			labels[i] = fmt.Sprintf(items, n)
 		}
 		sel := f.Select(settingsMaxItems, &w.itemsOpen, labels, choiceIndex(config.MaxItemsChoices, h.MaxItems)).
-			Placeholder(fmt.Sprintf("%d 条", h.MaxItems)).Width(140)
+			Placeholder(fmt.Sprintf(items, h.MaxItems)).Width(140)
 		if i, ok := sel.Picked(); ok {
 			canvas.AfterPaint(func() { h.MaxItems = config.MaxItemsChoices[i]; w.host.ApplyHistory() })
 		}
 	})
-	settingRow(f, "图片最多占用", func() {
+	settingRow(f, i18n.T("图片最多占用", "Images use at most"), func() {
 		labels := make([]string, len(config.MaxBytesChoices))
 		for i, n := range config.MaxBytesChoices {
 			labels[i] = bytesLabel(n)
@@ -275,12 +305,12 @@ func (w *settingsWindow) paintClipboard(f *flex.Frame, canvas *vui.Canvas) {
 			canvas.AfterPaint(func() { h.MaxBytes = config.MaxBytesChoices[i]; w.host.ApplyHistory() })
 		}
 	})
-	settingRow(f, "点击条目时", func() {
+	settingRow(f, i18n.T("点击条目时", "Clicking an item"), func() {
 		current := 0
 		if h.ClickAction == config.ClickPaste {
 			current = 1
 		}
-		if i, ok := f.Choice(settingsClick, []string{"仅复制", "复制并粘贴"}, current).ChosenIndex(); ok && i != current {
+		if i, ok := f.Choice(settingsClick, []string{i18n.T("仅复制", "Copies"), i18n.T("复制并粘贴", "Copies and pastes")}, current).ChosenIndex(); ok && i != current {
 			canvas.AfterPaint(func() {
 				h.ClickAction = config.ClickCopy
 				if i == 1 {
@@ -292,31 +322,33 @@ func (w *settingsWindow) paintClipboard(f *flex.Frame, canvas *vui.Canvas) {
 	})
 	if !w.host.AccessibilityGranted() {
 		f.Row().Gap(12).Items(flex.Center).Children(func() {
-			f.Wrap("粘贴到其他应用需要在 系统设置 › 隐私与安全性 › 辅助功能 中允许简截。").Muted().Grow(1)
-			if f.Button(settingsGrantAccess, "去开启").Outline().Small().Clicked() {
+			f.Wrap(i18n.T("粘贴到其他应用需要在 系统设置 › 隐私与安全性 › 辅助功能 中允许简截。",
+				"Pasting into other apps needs SnapLite allowed in System Settings › Privacy & Security › Accessibility.")).Muted().Grow(1)
+			if f.Button(settingsGrantAccess, i18n.T("去开启", "Allow")).Outline().Small().Clicked() {
 				canvas.AfterPaint(w.host.RequestAccessibility)
 			}
 		})
 	}
-	f.Wrap("相同的内容只保留一条：再次复制或从历史里恢复时，它会移到最前面。").Muted()
+	f.Wrap(i18n.T("相同的内容只保留一条：再次复制或从历史里恢复时，它会移到最前面。",
+		"The same content is kept only once: copying it again or restoring it from the history moves it to the top.")).Muted()
 }
 
 func (w *settingsWindow) paintCapture(f *flex.Frame, canvas *vui.Canvas) {
 	cfg := w.host.Config()
 	c := &cfg.Capture
-	settingRow(f, "图片质量", func() {
+	settingRow(f, i18n.T("图片质量", "Image quality"), func() {
 		current := max(choiceIndex(config.Qualities, c.Quality), 0)
-		sel := f.Select(settingsQuality, &w.qualityOpen, qualityLabels, current).Width(180)
+		sel := f.Select(settingsQuality, &w.qualityOpen, qualityLabels(), current).Width(200)
 		if i, ok := sel.Picked(); ok {
 			canvas.AfterPaint(func() { c.Quality = config.Qualities[i]; w.host.SaveConfig() })
 		}
 	})
-	settingRow(f, "分辨率", func() {
+	settingRow(f, i18n.T("分辨率", "Resolution"), func() {
 		current := 0
 		if c.Scale == config.Scale1x {
 			current = 1
 		}
-		if i, ok := f.Choice(settingsScale, []string{"原始", "标准 1×"}, current).ChosenIndex(); ok && i != current {
+		if i, ok := f.Choice(settingsScale, []string{i18n.T("原始", "Original"), i18n.T("标准 1×", "Standard 1×")}, current).ChosenIndex(); ok && i != current {
 			canvas.AfterPaint(func() {
 				c.Scale = config.ScaleOriginal
 				if i == 1 {
@@ -326,23 +358,33 @@ func (w *settingsWindow) paintCapture(f *flex.Frame, canvas *vui.Canvas) {
 			})
 		}
 	})
-	settingRow(f, "截图保存目录", func() {
-		if f.Button(settingsOpenDir, "打开").Outline().Small().Clicked() {
+	settingRow(f, i18n.T("截图保存目录", "Screenshots folder"), func() {
+		if f.Button(settingsOpenDir, i18n.T("打开", "Open")).Outline().Small().Clicked() {
 			canvas.AfterPaint(w.host.OpenSaveDirectory)
 		}
 	})
 	f.Text(cfg.SaveDirectory()).Muted().FontSize(sui.MutedTextSize)
-	f.Wrap(QualityNote).Muted()
-	f.Wrap("「标准 1×」把高分屏截图缩小到屏幕的逻辑尺寸，文件更小；复制、保存、剪切板历史和钉图都用缩小后的图片。").Muted()
+	f.Wrap(QualityNote()).Muted()
+	f.Wrap(i18n.T("「标准 1×」把高分屏截图缩小到屏幕的逻辑尺寸，文件更小；复制、保存、剪切板历史和钉图都用缩小后的图片。",
+		"“Standard 1×” shrinks high-DPI screenshots to the screen's logical size for smaller files; copying, saving, the clipboard history and pins all use the smaller picture.")).Muted()
 }
 
 func (w *settingsWindow) paintGeneral(f *flex.Frame, canvas *vui.Canvas) {
-	settingRow(f, "开机时启动简截", func() {
+	settingRow(f, i18n.T("语言", "Language"), func() {
+		current := max(choiceIndex(i18n.Settings, w.host.Config().Language), 0)
+		sel := f.Select(settingsLanguage, &w.langOpen, languageLabels(), current).Width(160)
+		if i, ok := sel.Picked(); ok && i != current {
+			canvas.AfterPaint(func() { w.host.SetLanguage(i18n.Settings[i]) })
+		}
+	})
+	login := i18n.T("开机时启动简截", "Launch SnapLite at login")
+	settingRow(f, login, func() {
 		on := w.host.LaunchAtLogin()
-		if f.Switch(settingsLogin, on).Label("开机时启动简截").Clicked() {
+		if f.Switch(settingsLogin, on).Label(login).Clicked() {
 			canvas.AfterPaint(func() {
 				if err := w.host.SetLaunchAtLogin(!on); err != nil {
-					w.say("开机启动设置失败：直接运行的程序不支持，请从「简截.app」启动。", true)
+					w.say(i18n.T("开机启动设置失败：直接运行的程序不支持，请从「简截.app」启动。",
+						"Could not set launch at login: a bare executable is not supported, start SnapLite from “简截.app”."), true)
 				} else {
 					w.say("", false)
 				}
@@ -370,7 +412,7 @@ func (w *settingsWindow) toggle(i int) {
 		w.host.BeginRecording()
 	}
 	w.recording = i
-	w.say("请按下新的快捷键，按 Esc 取消。", false)
+	w.say(i18n.T("请按下新的快捷键，按 Esc 取消。", "Press the new hotkey, or Esc to cancel."), false)
 }
 
 var settingsHandled = vui.EventResult{Handled: true, Repaint: true}
@@ -448,28 +490,29 @@ func (w *settingsWindow) record(key rune, mods vui.Modifiers) {
 	i := w.recording
 	h, ok := recordedHotkey(w.goos, key, mods, w.rightAlt())
 	if !ok {
-		w.say("不支持 Windows 徽标键组合，请换一个。", true)
+		w.say(i18n.T("不支持 Windows 徽标键组合，请换一个。", "Windows logo key combinations are not supported; try another."), true)
 		return
 	}
 	spec := config.SpecFor(w.goos, h)
 	if _, err := config.ParseHotkey(spec); err != nil {
-		w.say("字母和数字要搭配 ⌘、⌃ 或 ⌥（Windows 为 Ctrl 或 Alt），或者改用 F1–F12。", true)
+		w.say(i18n.T("字母和数字要搭配 ⌘、⌃ 或 ⌥（Windows 为 Ctrl 或 Alt），或者改用 F1–F12。",
+			"Letters and digits need ⌘, ⌃ or ⌥ (Ctrl or Alt on Windows); or use F1–F12."), true)
 		return
 	}
 	for j, other := range w.host.HotkeySpecs() {
 		if j != i && sameHotkey(other, spec) {
-			w.say(fmt.Sprintf("和「%s」的快捷键相同，请换一个。", hotkeyNames[j]), true)
+			w.say(fmt.Sprintf(i18n.T("和「%s」的快捷键相同，请换一个。", "Same as the %s hotkey; try another."), hotkeyName(j)), true)
 			return
 		}
 	}
 	w.recording = -1
-	w.say("正在应用…", false)
+	w.say(i18n.T("正在应用…", "Applying…"), false)
 	w.host.SetHotkey(i, spec, func(problem string) {
 		w.problems[i] = problem
 		if problem != "" {
-			w.say(problem+"，已保留原来的快捷键。", true)
+			w.say(problem+i18n.T("，已保留原来的快捷键。", "; the previous hotkey is kept."), true)
 		} else {
-			w.say(fmt.Sprintf("「%s」已改为 %s。", hotkeyNames[i], config.FormatHotkeyFor(w.goos, h)), false)
+			w.say(fmt.Sprintf(i18n.T("「%s」已改为 %s。", "%s is now %s."), hotkeyName(i), config.FormatHotkeyFor(w.goos, h)), false)
 		}
 		w.wake.Invalidate()
 	})
@@ -477,13 +520,13 @@ func (w *settingsWindow) record(key rune, mods vui.Modifiers) {
 
 func (w *settingsWindow) restoreDefaults() {
 	w.recording = -1
-	w.say("正在应用…", false)
+	w.say(i18n.T("正在应用…", "Applying…"), false)
 	w.host.RestoreDefaults(func(problems [2]string) {
 		w.problems = problems
-		w.say("已恢复默认快捷键。", false)
+		w.say(i18n.T("已恢复默认快捷键。", "Default hotkeys restored."), false)
 		for _, p := range problems {
 			if p != "" {
-				w.say(p+"。", true)
+				w.say(p+i18n.T("。", "."), true)
 				break
 			}
 		}
@@ -522,7 +565,7 @@ func (s *Shell) SetHotkey(index int, spec string, done func(problem string)) {
 		}
 		if err := s.cfg.Save(); err != nil {
 			s.log.Printf("config: %v", err)
-			done("快捷键已生效，但写入 config.json 失败")
+			done(i18n.T("快捷键已生效，但写入 config.json 失败", "The hotkey works, but config.json could not be written"))
 			return
 		}
 		done("")
@@ -560,6 +603,20 @@ func (s *Shell) ApplyHistory() {
 		store.SetLimits(history.Limits{MaxItems: s.cfg.History.MaxItems, MaxBytes: s.cfg.History.MaxBytes})
 	}
 	s.setWatching(s.cfg.History.Enabled)
+	s.SaveConfig()
+}
+
+// SetLanguage switches the interface language. Open windows show it from
+// their next paint and the tray menu the next time it opens.
+func (s *Shell) SetLanguage(setting string) {
+	s.cfg.Language = setting
+	s.applyLanguage()
+	// Hotkey problems are texts: registering again (which leaves the working
+	// hotkeys alone) writes them, and the tray tooltip, in the new language.
+	problems := s.registerHotkeys()
+	if s.settings != nil {
+		s.settings.problems = problems
+	}
 	s.SaveConfig()
 }
 

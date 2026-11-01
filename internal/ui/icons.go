@@ -19,6 +19,7 @@ const (
 	IconEllipse
 	IconArrow
 	IconPen
+	IconMosaic
 	IconUndo
 	IconRedo
 	IconPin
@@ -65,6 +66,19 @@ func DrawIcon(canvas *vui.Canvas, icon Icon, bounds vui.Rect, color vui.Color) {
 		b.Close()
 		b.MoveTo(11.4, 6)
 		b.LineTo(14, 8.6)
+	case IconMosaic:
+		// A square of 3×3 blocks.
+		b.MoveTo(3.5, 3.5)
+		b.LineTo(16.5, 3.5)
+		b.LineTo(16.5, 16.5)
+		b.LineTo(3.5, 16.5)
+		b.Close()
+		for _, v := range [...]float32{7.83, 12.17} {
+			b.MoveTo(v, 3.5)
+			b.LineTo(v, 16.5)
+			b.MoveTo(3.5, v)
+			b.LineTo(16.5, v)
+		}
 	case IconUndo:
 		b.MoveTo(7, 5)
 		b.LineTo(4, 8)

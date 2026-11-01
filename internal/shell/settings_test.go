@@ -8,6 +8,7 @@ import (
 	vui "github.com/vivaui/viva/ui"
 
 	"snaplite/internal/config"
+	"snaplite/internal/i18n"
 	"snaplite/internal/platform"
 	sui "snaplite/internal/ui"
 )
@@ -35,8 +36,13 @@ func (f *fakeHotkeys) Config() *config.Config {
 	}
 	return f.cfg
 }
-func (f *fakeHotkeys) ApplyHistory()              { f.applied++ }
-func (f *fakeHotkeys) SaveConfig()                { f.saved++ }
+func (f *fakeHotkeys) ApplyHistory() { f.applied++ }
+func (f *fakeHotkeys) SaveConfig()   { f.saved++ }
+func (f *fakeHotkeys) SetLanguage(setting string) {
+	f.Config().Language = setting
+	i18n.Set(i18n.Resolve(setting, true))
+	f.saved++
+}
 func (f *fakeHotkeys) LaunchAtLogin() bool        { return f.login }
 func (f *fakeHotkeys) AccessibilityGranted() bool { return f.granted }
 func (f *fakeHotkeys) RequestAccessibility()      { f.requested++ }

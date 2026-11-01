@@ -63,7 +63,9 @@ type State struct {
 }
 
 func newState(frame *capture.Frame) *State {
-	return &State{Frame: frame, Doc: annotate.NewDocument()}
+	st := &State{Frame: frame, Doc: annotate.NewDocument()}
+	st.Doc.Source, st.Doc.Scale = frame.Image, frame.Scale()
+	return st
 }
 
 // size is the overlay window's logical size.

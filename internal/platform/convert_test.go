@@ -69,22 +69,16 @@ func TestFunctionKeys(t *testing.T) {
 	}
 }
 
-func TestRightAltMatch(t *testing.T) {
-	h := Hotkey{Mods: ModRightAlt, Key: KeyF1}
-	if !rightAltMatch(h, 0x70, true, false) {
-		t.Error("right Alt+F1 should match")
+func TestRightAltVariants(t *testing.T) {
+	alt, altGr := rightAltVariants(Hotkey{Mods: ModRightAlt | ModShift, Key: KeyF1})
+	if alt != (Hotkey{Mods: ModAlt | ModShift, Key: KeyF1}) {
+		t.Errorf("alt = %+v", alt)
 	}
-	if rightAltMatch(h, 0x70, false, false) {
-		t.Error("F1 without right Alt (left Alt or none) must not match")
+	if got := winModifiers(altGr.Mods); got != winModNoRepeat|winModAlt|winModControl|winModShift {
+		t.Errorf("AltGr modifiers = %#x", got)
 	}
-	if rightAltMatch(h, 0x71, true, false) {
-		t.Error("right Alt+F2 must not match an F1 hotkey")
-	}
-	if rightAltMatch(h, 0x70, true, true) {
-		t.Error("Shift was not asked for")
-	}
-	if !rightAltMatch(Hotkey{Mods: ModRightAlt | ModShift, Key: KeyF1}, 0x70, true, true) {
-		t.Error("right Alt+Shift+F1 should match")
+	if got := winModifiers(alt.Mods); got&winModControl != 0 {
+		t.Errorf("plain variant has Control: %#x", got)
 	}
 }
 
@@ -202,5 +196,24 @@ func TestWindowAtAndHotkeyTable(t *testing.T) {
 	f()
 	if n != 1 {
 		t.Fatal("once")
+	}
+}
+
+func TestMonitorForBoundsPrefersExactMatch(t *testing.T) {
+	// A 1080p primary at 100% and a 4K secondary at 250% to its right: the
+	// secondary's logical bounds (768, 0, 1536×864) lie inside the primary's.
+	primary := monitorGeometry{Physical: Rect{W: 1920, H: 1080}, Scale: 1}
+	secondary := monitorGeometry{Physical: Rect{X: 1920, W: 3840, H: 2160}, Scale: 2.5}
+	monitors := []monitorGeometry{primary, secondary}
+	m, ok := monitorForBounds(monitors, secondary.logical())
+	if !ok || m != secondary {
+		t.Fatalf("got %+v, want the secondary", m)
+	}
+	if got := m.toPhysical(secondary.logical()); got != secondary.Physical {
+		t.Fatalf("physical %+v, want %+v", got, secondary.Physical)
+	}
+	// A rectangle that is no display's falls back to its centre.
+	if m, ok := monitorForBounds(monitors, Rect{X: 100, Y: 100, W: 200, H: 100}); !ok || m != primary {
+		t.Fatalf("got %+v, want the primary", m)
 	}
 }

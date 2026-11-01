@@ -13,3 +13,7 @@ category = "public.app-category.utilities"
 [mac.info]
 NSScreenCaptureUsageDescription = "简截需要屏幕录制权限来截取屏幕画面。"
 LSUIElement = "1"
+
+[windows]
+publisher = "SnapLite"
+url = "https://github.com/yulan233/SnapLite"

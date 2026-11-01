@@ -12,6 +12,7 @@ import (
 
 	"snaplite/internal/config"
 	"snaplite/internal/history"
+	"snaplite/internal/i18n"
 	"snaplite/internal/platform"
 	"snaplite/internal/raster"
 	sui "snaplite/internal/ui"
@@ -229,8 +230,8 @@ func (s *Shell) pasteToFront() {
 
 func (s *Shell) extraMenu() []app.MenuItem {
 	return []app.MenuItem{
-		{Title: "暂停记录", Checked: s.extra.paused, Disabled: !s.cfg.History.Enabled, OnSelect: func() { s.extra.paused = !s.extra.paused }},
-		{Title: "开机启动", Checked: platform.LaunchAtLogin(), OnSelect: func() {
+		{Title: i18n.T("暂停记录", "Pause Recording"), Checked: s.extra.paused, Disabled: !s.cfg.History.Enabled, OnSelect: func() { s.extra.paused = !s.extra.paused }},
+		{Title: i18n.T("开机启动", "Launch at Login"), Checked: platform.LaunchAtLogin(), OnSelect: func() {
 			if err := platform.SetLaunchAtLogin(!platform.LaunchAtLogin()); err != nil {
 				s.log.Printf("launch at login: %v", err)
 			}

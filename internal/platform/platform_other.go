@@ -2,7 +2,11 @@
 
 package platform
 
-import "image"
+import (
+	"image"
+	"os"
+	"strings"
+)
 
 // This adapter exists so the module builds and vets on every GOOS. Nothing
 // here is supported.
@@ -37,6 +41,9 @@ func SetLaunchAtLogin(bool) error                   { return ErrUnsupported }
 func LaunchAtLogin() bool                           { return false }
 
 func RightAltDown() bool { return false }
+
+// PrefersChinese reads LANG, the only language setting there is here.
+func PrefersChinese() bool { return strings.HasPrefix(os.Getenv("LANG"), "zh") }
 
 func SaveForegroundApp()     {}
 func PasteToSavedApp() error { return ErrUnsupported }

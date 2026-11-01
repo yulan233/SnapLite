@@ -10,6 +10,7 @@ import (
 	"github.com/vivaui/viva/components"
 	vui "github.com/vivaui/viva/ui"
 
+	"snaplite/internal/i18n"
 	"snaplite/internal/platform"
 	"snaplite/internal/raster"
 	sui "snaplite/internal/ui"
@@ -279,9 +280,9 @@ func (p *Pin) paint(canvas *vui.Canvas, size vui.Size) {
 	t := p.tokens
 	bounds := vui.Rect{Width: size.Width, Height: size.Height}
 	content := vui.Rect{Width: min(float32(p.frame.W), size.Width), Height: min(float32(p.frame.H), size.Height)}
-	label := "钉住的文字"
+	label := i18n.T("钉住的文字", "Pinned text")
 	if p.image != nil {
-		label = "钉住的图片"
+		label = i18n.T("钉住的图片", "Pinned image")
 	}
 	canvas.HitWithOptions(surfaceID, content, label, vui.HitOptions{SkipFocus: true})
 	if p.image == nil || content != bounds {
@@ -317,10 +318,10 @@ func (p *Pin) paintMenu(canvas *vui.Canvas, bounds vui.Rect) {
 	menu := components.BeginContextMenu(canvas, p.tokens.VivaTheme(), at, components.ContextMenuOptions{
 		Layer: menuLayer, Scope: menuScope, DismissID: menuDismiss, Viewport: bounds,
 	})
-	menu.AddItem(components.ContextMenuItem{ID: menuCopy, Label: "复制"})
-	menu.AddItem(components.ContextMenuItem{ID: menuSave, Label: "保存到本地…"})
+	menu.AddItem(components.ContextMenuItem{ID: menuCopy, Label: i18n.T("复制", "Copy")})
+	menu.AddItem(components.ContextMenuItem{ID: menuSave, Label: i18n.T("保存到本地…", "Save As…")})
 	menu.AddSeparator()
-	menu.AddItem(components.ContextMenuItem{ID: menuUnpin, Label: "取消钉住"})
+	menu.AddItem(components.ContextMenuItem{ID: menuUnpin, Label: i18n.T("取消钉住", "Unpin")})
 	menu.End()
 	then := func(fn func()) {
 		canvas.AfterPaint(func() {

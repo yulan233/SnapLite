@@ -12,6 +12,7 @@ import (
 	"github.com/vivaui/viva/text"
 	vui "github.com/vivaui/viva/ui"
 
+	"snaplite/internal/i18n"
 	sui "snaplite/internal/ui"
 )
 
@@ -50,7 +51,9 @@ const (
 )
 
 // EmptyText is the empty state's message.
-const EmptyText = "复制的图片和文字会出现在这里"
+func EmptyText() string {
+	return i18n.T("复制的图片和文字会出现在这里", "Images and text you copy appear here")
+}
 
 // row is the display form of one item, computed when the history changes so
 // painting formats nothing.
@@ -76,6 +79,7 @@ type Panel struct {
 	wake   app.Invalidator
 
 	version  uint64
+	lang     i18n.Lang // the language the rows' texts are in
 	all      []row
 	shown    []int // indexes into all that match the query
 	count    string
@@ -127,21 +131,21 @@ func (p *Panel) Wake() { p.wake.Invalidate() }
 // refresh rebuilds the rows when the store changed.
 func (p *Panel) refresh() {
 	v := p.store.Version()
-	if p.all != nil && v == p.version {
+	if p.all != nil && v == p.version && p.lang == i18n.Current() {
 		return
 	}
-	p.version = v
+	p.version, p.lang = v, i18n.Current()
 	now := p.now()
 	items := p.store.Items()
 	p.all = p.all[:0]
 	for _, it := range items {
 		r := row{item: it, age: RelativeTime(now, it.Created)}
 		if it.Kind == KindImage {
-			r.detail = fmt.Sprintf("%d × %d 图片", it.Size[0], it.Size[1])
+			r.detail = fmt.Sprintf(i18n.T("%d × %d 图片", "%d × %d image"), it.Size[0], it.Size[1])
 			r.label = r.detail
 		} else {
 			r.preview = previewText(it.Text)
-			r.detail = fmt.Sprintf("%d 字", utf8.RuneCountInString(it.Text))
+			r.detail = fmt.Sprintf(i18n.T("%d 字", "%d chars"), utf8.RuneCountInString(it.Text))
 			r.label = r.preview
 			r.lower = strings.ToLower(it.Text)
 		}
@@ -399,10 +403,11 @@ func (p *Panel) paint(canvas *vui.Canvas, size vui.Size) {
 		f.Column().Fill().Children(func() {
 			f.Row().Height(52).PadX(12).Items(flex.Center).Children(func() {
 				value := p.editor.String()
+				search := i18n.T("搜索剪切板历史", "Search clipboard history")
 				focused := canvas.Focused() == searchID
 				sel := p.editor.Selection()
 				f.Input(components.InputSnapshot{
-					ID: searchID, Label: "搜索剪切板历史", Value: value, Placeholder: "搜索剪切板历史",
+					ID: searchID, Label: search, Value: value, Placeholder: search,
 					Focused: focused, PlatformEditing: focused && value != "", ShowCaret: focused && value == "",
 					NavigationKeys: true, Caret: p.editor.Caret(), SelectionStart: sel.Start, SelectionEnd: sel.End,
 				}).Grow(1)
@@ -410,7 +415,7 @@ func (p *Panel) paint(canvas *vui.Canvas, size vui.Size) {
 			f.Divider()
 			if len(p.shown) == 0 {
 				f.Column().Grow(1).Items(flex.Center).Justify(flex.Center).Gap(8).Children(func() {
-					f.Text(EmptyText).Muted()
+					f.Text(EmptyText()).Muted()
 				})
 			} else {
 				f.ScrollArea(listID).Grow(1).Children(func() { p.paintRows(f, canvas) })
@@ -422,19 +427,20 @@ func (p *Panel) paint(canvas *vui.Canvas, size vui.Size) {
 					f.Text(hint).Muted().FontSize(sui.MutedTextSize)
 				}
 				f.Spacer()
-				if f.Button(clearID, "清空历史").Ghost().Destructive().Small().Disabled(len(p.all) == 0).Clicked() {
+				if f.Button(clearID, i18n.T("清空历史", "Clear History")).Ghost().Destructive().Small().Disabled(len(p.all) == 0).Clicked() {
 					canvas.AfterPaint(func() { p.confirm = true })
 				}
 			})
 		})
 		if p.confirm {
 			d := f.Dialog(flex.DialogSpec{
-				Title: "清空剪切板历史？", Description: "所有记录将被删除，且无法恢复。", Width: 340,
+				Title:       i18n.T("清空剪切板历史？", "Clear clipboard history?"),
+				Description: i18n.T("所有记录将被删除，且无法恢复。", "Every item will be deleted. This cannot be undone."), Width: 340,
 				Scope: confirmFocus, DismissID: confirmCancel, NoClose: true,
 			})
 			d.Footer(func() {
-				f.Button(confirmCancel, "取消").Outline()
-				if f.Button(confirmClear, "清空").Destructive().Clicked() {
+				f.Button(confirmCancel, i18n.T("取消", "Cancel")).Outline()
+				if f.Button(confirmClear, i18n.T("清空", "Clear")).Destructive().Clicked() {
 					canvas.AfterPaint(func() {
 						_ = p.store.Clear()
 						p.confirm = false
@@ -455,17 +461,17 @@ func (p *Panel) paint(canvas *vui.Canvas, size vui.Size) {
 // menuItems is the context menu of a row: 复制, 粘贴, 钉到桌面 and 保存到本地…
 // as far as the shell offers them, then 删除.
 func (p *Panel) menuItems() []components.ContextMenuItem {
-	items := []components.ContextMenuItem{{ID: menuCopy, Label: "复制"}}
+	items := []components.ContextMenuItem{{ID: menuCopy, Label: i18n.T("复制", "Copy")}}
 	if p.OnPaste != nil {
-		items = append(items, components.ContextMenuItem{ID: menuPaste, Label: "粘贴"})
+		items = append(items, components.ContextMenuItem{ID: menuPaste, Label: i18n.T("粘贴", "Paste")})
 	}
 	if p.OnPin != nil {
-		items = append(items, components.ContextMenuItem{ID: menuPin, Label: "钉到桌面"})
+		items = append(items, components.ContextMenuItem{ID: menuPin, Label: i18n.T("钉到桌面", "Pin to Desktop")})
 	}
 	if p.OnSave != nil {
-		items = append(items, components.ContextMenuItem{ID: menuSave, Label: "保存到本地…"})
+		items = append(items, components.ContextMenuItem{ID: menuSave, Label: i18n.T("保存到本地…", "Save As…")})
 	}
-	return append(items, components.ContextMenuItem{ID: menuDelete, Label: "删除", Variant: components.ContextMenuItemDestructive})
+	return append(items, components.ContextMenuItem{ID: menuDelete, Label: i18n.T("删除", "Delete"), Variant: components.ContextMenuItemDestructive})
 }
 
 // paintMenu draws the open context menu at the pointer, kept inside the panel;
@@ -515,13 +521,14 @@ func (p *Panel) paintMenu(canvas *vui.Canvas, bounds vui.Rect) {
 // hint is the keyboard help in the footer: "↵ 复制 · ⌘↵ 粘贴". The rows show
 // their own quick-paste chords (⌘1..⌘9).
 func (p *Panel) hint() string {
+	copyText, paste := i18n.T("复制", "Copy"), i18n.T("粘贴", "Paste")
 	if p.OnPaste == nil {
-		return "↵ 复制"
+		return "↵ " + copyText
 	}
 	if p.clickPastes() {
-		return fmt.Sprintf("↵ 粘贴 · %s↵ 复制", p.Mod)
+		return fmt.Sprintf("↵ %s · %s↵ %s", paste, p.Mod, copyText)
 	}
-	return fmt.Sprintf("↵ 复制 · %s↵ 粘贴", p.Mod)
+	return fmt.Sprintf("↵ %s · %s↵ %s", copyText, p.Mod, paste)
 }
 
 // rowActive reports whether row i shows its buttons: selected or hovered.
@@ -556,13 +563,13 @@ func (p *Panel) paintRows(f *flex.Frame, canvas *vui.Canvas) {
 			}
 			if p.rowActive(canvas, i) {
 				// The selected or hovered row offers both actions.
-				if f.Button(copyButtons.At(i), "复制").Outline().Small().Clicked() {
+				if f.Button(copyButtons.At(i), i18n.T("复制", "Copy")).Outline().Small().Clicked() {
 					canvas.AfterPaint(func() { p.selected = i; p.restore(i, false) })
 				}
-				if p.OnPin != nil && f.Button(pinButtons.At(i), "钉住").Outline().Small().Clicked() {
+				if p.OnPin != nil && f.Button(pinButtons.At(i), i18n.T("钉住", "Pin")).Outline().Small().Clicked() {
 					canvas.AfterPaint(func() { p.selected = i; p.OnPin(r.item) })
 				}
-				if p.OnPaste != nil && f.Button(pasteButtons.At(i), "粘贴").Small().Clicked() {
+				if p.OnPaste != nil && f.Button(pasteButtons.At(i), i18n.T("粘贴", "Paste")).Small().Clicked() {
 					canvas.AfterPaint(func() { p.selected = i; p.restore(i, true) })
 				}
 				return
@@ -605,25 +612,29 @@ func thumbSize(it Item, b vui.Bitmap, ok bool) (float32, float32) {
 	return max(w*scale, 8), max(h*scale, 8)
 }
 
-func countText(n int) string { return fmt.Sprintf("共 %d 条", n) }
+func countText(n int) string { return fmt.Sprintf(i18n.T("共 %d 条", "%d items"), n) }
 
-// RelativeTime is "刚刚", "N 分钟前", "N 小时前", "昨天" or "M月D日".
+// RelativeTime is "刚刚", "N 分钟前", "N 小时前", "昨天" or "M月D日" (in
+// English "just now", "N min ago", "N h ago", "yesterday" or "Jan 2").
 func RelativeTime(now, t time.Time) string {
 	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
-		return "刚刚"
+		return i18n.T("刚刚", "just now")
 	case d < time.Hour:
-		return fmt.Sprintf("%d 分钟前", int(d/time.Minute))
+		return fmt.Sprintf(i18n.T("%d 分钟前", "%d min ago"), int(d/time.Minute))
 	}
 	ny, nm, nd := now.Date()
 	ty, tm, td := t.Date()
 	if ny == ty && nm == tm && nd == td {
-		return fmt.Sprintf("%d 小时前", int(d/time.Hour))
+		return fmt.Sprintf(i18n.T("%d 小时前", "%d h ago"), int(d/time.Hour))
 	}
 	yesterday := now.AddDate(0, 0, -1)
 	if yy, ym, yd := yesterday.Date(); yy == ty && ym == tm && yd == td {
-		return "昨天"
+		return i18n.T("昨天", "yesterday")
+	}
+	if i18n.Current() == i18n.English {
+		return t.Format("Jan 2")
 	}
 	return fmt.Sprintf("%d月%d日", int(tm), td)
 }

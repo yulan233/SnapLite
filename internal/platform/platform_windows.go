@@ -65,11 +65,9 @@ var (
 	procGetThreadDpiAwarenessContext  = user32.NewProc("GetThreadDpiAwarenessContext")
 	procAreDpiAwarenessContextsEqual  = user32.NewProc("AreDpiAwarenessContextsEqual")
 	procSetThreadDpiAwarenessContext  = user32.NewProc("SetThreadDpiAwarenessContext")
-	procSetWindowsHookExW             = user32.NewProc("SetWindowsHookExW")
-	procUnhookWindowsHookEx           = user32.NewProc("UnhookWindowsHookEx")
-	procCallNextHookEx                = user32.NewProc("CallNextHookEx")
 	procGetAsyncKeyState              = user32.NewProc("GetAsyncKeyState")
 	procGetForegroundWindow           = user32.NewProc("GetForegroundWindow")
+	procIsWindow                      = user32.NewProc("IsWindow")
 
 	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
 	procCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
@@ -85,6 +83,8 @@ var (
 	procGlobalLock         = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock       = kernel32.NewProc("GlobalUnlock")
 	procGlobalSize         = kernel32.NewProc("GlobalSize")
+
+	procGetUserDefaultUILanguage = kernel32.NewProc("GetUserDefaultUILanguage")
 
 	procGetDpiForMonitor      = shcore.NewProc("GetDpiForMonitor")
 	procDwmGetWindowAttribute = dwmapi.NewProc("DwmGetWindowAttribute")
@@ -463,14 +463,7 @@ func RaiseOverlay(title string, bounds Rect) error {
 	if hwnd == 0 {
 		return ErrNotFound
 	}
-	style, _, _ := procGetWindowLongPtrW.Call(hwnd, gwlExStyle)
-	style = (style | wsExToolWindow | wsExTopmost) &^ wsExAppWindow
-	procSetWindowLongPtrW.Call(hwnd, gwlExStyle, style)
-	phys := bounds
-	if m, ok := findMonitor(cachedMonitors(), bounds.X+bounds.W/2, bounds.Y+bounds.H/2); ok {
-		phys = m.toPhysical(bounds)
-	}
-	procSetWindowPos.Call(hwnd, hwndTopmost, uintptr(int32(phys.X)), uintptr(int32(phys.Y)), uintptr(int32(phys.W)), uintptr(int32(phys.H)), swpShowWindow|swpFrameChanged)
+	placeWindow(hwnd, bounds, swpShowWindow|swpFrameChanged)
 	// The foreground lock is lifted for a process that just received input;
 	// a synthetic Alt press counts, which is the classic way to take the
 	// foreground from a hotkey or tray handler.
@@ -487,15 +480,50 @@ func FloatWindow(title string, bounds Rect) error {
 	if hwnd == 0 {
 		return ErrNotFound
 	}
+	placeWindow(hwnd, bounds, swpShowWindow|swpFrameChanged|swpNoActivate)
+	return nil
+}
+
+// placeWindow makes hwnd a topmost tool window covering the logical bounds,
+// in that display's physical pixels.
+//
+// Moving a window onto a display of another scale makes Windows send
+// WM_DPICHANGED, and Viva then applies its suggested rectangle: the old size
+// times the ratio of the scales. An overlay moved from a 100% primary onto a
+// 125% secondary would come out 25% too large, its picture stretched past the
+// screen's edges. Once the scale has changed the window is placed again,
+// right away (the message is sent during SetWindowPos) and once more on the
+// next loop turn in case it was posted instead.
+func placeWindow(hwnd uintptr, bounds Rect, flags uintptr) {
 	style, _, _ := procGetWindowLongPtrW.Call(hwnd, gwlExStyle)
 	style = (style | wsExToolWindow | wsExTopmost) &^ wsExAppWindow
 	procSetWindowLongPtrW.Call(hwnd, gwlExStyle, style)
 	phys := bounds
-	if m, ok := findMonitor(cachedMonitors(), bounds.X+bounds.W/2, bounds.Y+bounds.H/2); ok {
+	if m, ok := monitorForBounds(cachedMonitors(), bounds); ok {
 		phys = m.toPhysical(bounds)
 	}
-	procSetWindowPos.Call(hwnd, hwndTopmost, uintptr(int32(phys.X)), uintptr(int32(phys.Y)), uintptr(int32(phys.W)), uintptr(int32(phys.H)), swpShowWindow|swpFrameChanged|swpNoActivate)
-	return nil
+	setWindowRect(hwnd, phys, flags)
+	if !windowRectIs(hwnd, phys) {
+		setWindowRect(hwnd, phys, flags)
+	}
+	PostMain(func() {
+		if ok, _, _ := procIsWindow.Call(hwnd); ok != 0 && !windowRectIs(hwnd, phys) {
+			setWindowRect(hwnd, phys, flags|swpNoActivate)
+		}
+	})
+}
+
+func setWindowRect(hwnd uintptr, phys Rect, flags uintptr) {
+	procSetWindowPos.Call(hwnd, hwndTopmost, uintptr(int32(phys.X)), uintptr(int32(phys.Y)), uintptr(int32(phys.W)), uintptr(int32(phys.H)), flags)
+}
+
+// windowRectIs reports whether the window's rectangle is phys.
+func windowRectIs(hwnd uintptr, phys Rect) bool {
+	var r rect
+	if ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
+		return true
+	}
+	return r.Left == int32(phys.X) && r.Top == int32(phys.Y) && r.Right-r.Left == int32(phys.W) && r.Bottom-r.Top == int32(phys.H)
 }
 
 func windowBounds(hwnd uintptr, geometry []monitorGeometry) (Rect, bool) {
@@ -602,29 +630,20 @@ func RegisterHotkey(h Hotkey, fn func()) (func(), error) {
 	}), nil
 }
 
-// RegisterHotKey cannot tell the two Alt keys apart, so right-Alt hotkeys go
-// through one low-level keyboard hook, installed on the event-loop thread
-// (whose message loop runs it) while at least one such hotkey exists.
+// RegisterHotKey cannot tell the two Alt keys apart, so a right-Alt hotkey is
+// registered as an Alt hotkey whose handler checks that the right Alt key is
+// the one held. A low-level keyboard hook could let left Alt+key through
+// instead, but a global keyboard hook in a program that also captures the
+// screen and watches the clipboard is what antivirus heuristics flag as a
+// keylogger (360 reported Trojan.Generic), so left Alt with the same key
+// does nothing while SnapLite holds the hotkey.
 
 const (
-	whKeyboardLL     = 13
-	wmKeyDown        = 0x0100
-	wmSysKeyDown     = 0x0104
-	llkhfInjected    = 0x10
-	vkShift          = 0x10
 	vkRightMenu      = 0xA5
 	vkNoName         = 0xFC // VK_NONAME: an unassigned key
 	inputKeyboard    = 1
 	keyEventFKeyUpLL = 0x0002
 )
-
-type kbdLLHookStruct struct {
-	VKCode    uint32
-	ScanCode  uint32
-	Flags     uint32
-	Time      uint32
-	ExtraInfo uintptr
-}
 
 type keybdInput struct {
 	VK        uint16
@@ -642,40 +661,9 @@ type keyboardInputRecord struct {
 	_    [8]byte
 }
 
-type rightAltEntry struct {
-	hotkey Hotkey
-	fn     func()
-}
-
-var (
-	rightAltHook     uintptr
-	rightAltCallback uintptr // created once: NewCallback slots are never freed
-	rightAltHotkeys  = map[uint32]rightAltEntry{}
-	rightAltNext     uint32
-)
-
 func keyDown(vk uintptr) bool {
 	state, _, _ := procGetAsyncKeyState.Call(vk)
 	return state&0x8000 != 0
-}
-
-func rightAltHookProc(code int, wParam, lParam uintptr) uintptr {
-	if code == 0 && (wParam == wmKeyDown || wParam == wmSysKeyDown) {
-		info := (*kbdLLHookStruct)(pointer(lParam))
-		if info.Flags&llkhfInjected == 0 {
-			vk := uint16(info.VKCode)
-			rightAlt, shift := keyDown(vkRightMenu), keyDown(vkShift)
-			for _, entry := range rightAltHotkeys {
-				if rightAltMatch(entry.hotkey, vk, rightAlt, shift) {
-					suppressAltMenu()
-					PostMain(entry.fn) // the hook must return quickly
-					return 1           // swallow the key
-				}
-			}
-		}
-	}
-	result, _, _ := procCallNextHookEx.Call(0, uintptr(code), wParam, lParam)
-	return result
 }
 
 // suppressAltMenu taps an unassigned key so that releasing Alt afterwards does
@@ -689,28 +677,26 @@ func suppressAltMenu() {
 }
 
 func registerRightAltHotkey(h Hotkey, fn func()) (func(), error) {
-	if rightAltHook == 0 {
-		if rightAltCallback == 0 {
-			rightAltCallback = syscall.NewCallback(rightAltHookProc)
+	onRightAlt := func() {
+		if keyDown(vkRightMenu) {
+			suppressAltMenu()
+			fn()
 		}
-		instance, _, _ := procGetModuleHandleW.Call(0)
-		hook, _, err := procSetWindowsHookExW.Call(whKeyboardLL, rightAltCallback, instance, 0)
-		if hook == 0 {
-			return nil, fmt.Errorf("platform: SetWindowsHookExW: %w", err)
-		}
-		rightAltHook = hook
 	}
-	rightAltNext++
-	id := rightAltNext
-	rightAltHotkeys[id] = rightAltEntry{hotkey: h, fn: fn}
+	alt, altGr := rightAltVariants(h)
+	unregister, err := RegisterHotkey(alt, onRightAlt)
+	if err != nil {
+		return nil, err
+	}
+	// The AltGr variant is a convenience: when another program holds it, the
+	// plain one still works.
+	unregisterAltGr, err := RegisterHotkey(altGr, onRightAlt)
+	if err != nil {
+		return unregister, nil
+	}
 	return once(func() {
-		PostMain(func() {
-			delete(rightAltHotkeys, id)
-			if len(rightAltHotkeys) == 0 && rightAltHook != 0 {
-				procUnhookWindowsHookEx.Call(rightAltHook)
-				rightAltHook = 0
-			}
-		})
+		unregister()
+		unregisterAltGr()
 	}), nil
 }
 
@@ -917,6 +903,13 @@ func LaunchAtLogin() bool {
 	name, _ := syscall.UTF16PtrFromString(runValue)
 	status, _, _ := procRegQueryValueExW.Call(key, uintptr(unsafe.Pointer(name)), 0, 0, 0, 0)
 	return status == 0
+}
+
+// PrefersChinese reports whether the user interface language is Chinese
+// (primary language LANG_CHINESE, any region).
+func PrefersChinese() bool {
+	lang, _, _ := procGetUserDefaultUILanguage.Call()
+	return lang&0x3FF == 0x04
 }
 
 // RightAltDown reports whether the right Alt key is held now. A window that

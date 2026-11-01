@@ -11,6 +11,7 @@ import (
 
 	"snaplite/internal/annotate"
 	"snaplite/internal/capture"
+	"snaplite/internal/i18n"
 	sui "snaplite/internal/ui"
 )
 
@@ -61,10 +62,13 @@ type Controller struct {
 }
 
 // HintRegion is the capsule text (docs/02 §3.1).
+func HintRegion() string {
+	return i18n.T("拖动选择区域 · 右键或 Esc 退出", "Drag to select an area · Right-click or Esc to exit")
+}
+
 const (
-	HintRegion = "拖动选择区域 · 右键或 Esc 退出"
-	hintShown  = 2 * time.Second
-	hintFade   = 200 * time.Millisecond
+	hintShown = 2 * time.Second
+	hintFade  = 200 * time.Millisecond
 )
 
 // NewController makes the overlays of a session. onResult runs once, on the
@@ -372,7 +376,7 @@ func (c *Controller) shortcut(i int, e vui.KeyEvent) vui.EventResult {
 			return vui.EventResult{Handled: true, ClipboardText: st.pixel}
 		}
 		c.finish(Done)
-	case "1", "2", "3", "4":
+	case "1", "2", "3", "4", "5":
 		if st.Phase == PhaseEditing {
 			t := annotate.Tool(e.Text[0]-'1') + annotate.ToolRect
 			c.toggleTool(st, t)
@@ -402,7 +406,7 @@ func (c *Controller) toolbarSpec(st *State) sui.ToolbarSpec {
 // act applies a toolbar click; it runs after the paint that saw the click.
 func (c *Controller) act(st *State, a sui.Action) {
 	switch a {
-	case sui.ActRect, sui.ActEllipse, sui.ActArrow, sui.ActPen:
+	case sui.ActRect, sui.ActEllipse, sui.ActArrow, sui.ActPen, sui.ActMosaic:
 		c.toggleTool(st, sui.ActionTool(a))
 	case sui.ActUndo:
 		st.Doc.Undo()

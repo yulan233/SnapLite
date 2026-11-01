@@ -565,3 +565,10 @@ int sl_paste_to_saved_app(void) {
     });
     return 0;
 }
+
+// sl_prefers_chinese reports whether the user's first preferred language is
+// Chinese (zh, zh-Hans, zh-Hant-TW, ...).
+int sl_prefers_chinese(void) {
+    NSString *first = [[NSLocale preferredLanguages] firstObject];
+    return first != nil && [first hasPrefix:@"zh"];
+}

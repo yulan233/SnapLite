@@ -16,6 +16,7 @@ import (
 
 	"snaplite/internal/capture"
 	"snaplite/internal/config"
+	"snaplite/internal/i18n"
 	"snaplite/internal/overlay"
 	"snaplite/internal/pin"
 	"snaplite/internal/platform"
@@ -96,6 +97,7 @@ func (s *Shell) Start() error {
 	if err := platform.Init(); err != nil && !errors.Is(err, platform.ErrUnsupported) {
 		s.log.Printf("platform init: %v", err)
 	}
+	s.applyLanguage()
 	// RunApplication needs an open window, and the application ends when the
 	// last one closes, so a 1×1 window stays open, hidden.
 	var hostCanvas vui.Canvas
@@ -111,6 +113,11 @@ func (s *Shell) Start() error {
 	}
 	s.startExtensions()
 	return nil
+}
+
+// applyLanguage puts the configured interface language into effect.
+func (s *Shell) applyLanguage() {
+	i18n.Set(i18n.Resolve(s.cfg.Language, platform.PrefersChinese()))
 }
 
 // Quit unregisters everything, closes the pins and ends the application.
@@ -141,16 +148,16 @@ func (s *Shell) registerHotkeys() [2]string {
 		}
 		h, err := config.ParseHotkey(*spec)
 		if err != nil {
-			problems[i] = fmt.Sprintf("快捷键 %s 无效，可在 设置 中修改", *spec)
+			problems[i] = fmt.Sprintf(i18n.T("快捷键 %s 无效，可在 设置 中修改", "Hotkey %s is invalid; change it in Settings"), *spec)
 			s.log.Print(err)
 			continue
 		}
 		unregister, err := platform.RegisterHotkey(h, actions[i])
 		switch {
 		case errors.Is(err, platform.ErrHotkeyTaken):
-			problems[i] = fmt.Sprintf("快捷键 %s 已被其他程序占用，可在 设置 中修改", config.FormatHotkey(h))
+			problems[i] = fmt.Sprintf(i18n.T("快捷键 %s 已被其他程序占用，可在 设置 中修改", "Hotkey %s is taken by another program; change it in Settings"), config.FormatHotkey(h))
 		case err != nil:
-			problems[i] = fmt.Sprintf("快捷键 %s 注册失败", config.FormatHotkey(h))
+			problems[i] = fmt.Sprintf(i18n.T("快捷键 %s 注册失败", "Hotkey %s could not be registered"), config.FormatHotkey(h))
 			s.log.Printf("hotkey %s: %v", *spec, err)
 		default:
 			s.hotkeyOff[i] = unregister
@@ -165,11 +172,7 @@ func (s *Shell) registerHotkeys() [2]string {
 		}
 	}
 	if s.tray != nil {
-		tooltip := "简截"
-		if s.hotkeyProblem != "" {
-			tooltip += " · " + s.hotkeyProblem
-		}
-		s.tray.SetTooltip(tooltip)
+		s.tray.SetTooltip(s.trayTooltip())
 	}
 	return problems
 }
@@ -354,25 +357,29 @@ func (s *Shell) deliver(img *image.RGBA, data []byte) {
 
 // SaveName is the suggested file name for a screenshot taken at t, with the
 // extension "png" or "jpg".
-func SaveName(t time.Time, ext string) string { return t.Format("简截_20060102_150405.") + ext }
+func SaveName(t time.Time, ext string) string {
+	return t.Format(i18n.T("简截", "SnapLite")+"_20060102_150405.") + ext
+}
 
 // TextSaveName is the suggested file name for a saved clipboard text.
-func TextSaveName(t time.Time) string { return t.Format("剪切板_20060102_150405.txt") }
+func TextSaveName(t time.Time) string {
+	return t.Format(i18n.T("剪切板", "Clipboard") + "_20060102_150405.txt")
+}
 
 // imageSaveOptions is the save dialog for a picture encoded as ext ("png"
 // or "jpg", raster.EncodeFile's).
 func imageSaveOptions(ext string, t time.Time) app.SaveFileOptions {
-	filter := app.FileFilter{Name: "PNG 图片", Pattern: "*.png"}
+	filter := app.FileFilter{Name: i18n.T("PNG 图片", "PNG Image"), Pattern: "*.png"}
 	if ext == "jpg" {
-		filter = app.FileFilter{Name: "JPEG 图片", Pattern: "*.jpg"}
+		filter = app.FileFilter{Name: i18n.T("JPEG 图片", "JPEG Image"), Pattern: "*.jpg"}
 	}
-	return app.SaveFileOptions{Title: "保存截图", SuggestedName: SaveName(t, ext), DefaultExtension: ext, Filters: []app.FileFilter{filter}}
+	return app.SaveFileOptions{Title: i18n.T("保存截图", "Save Screenshot"), SuggestedName: SaveName(t, ext), DefaultExtension: ext, Filters: []app.FileFilter{filter}}
 }
 
 // textSaveOptions is the save dialog for a text, written as UTF-8.
 func textSaveOptions(t time.Time) app.SaveFileOptions {
-	return app.SaveFileOptions{Title: "保存文字", SuggestedName: TextSaveName(t), DefaultExtension: "txt",
-		Filters: []app.FileFilter{{Name: "文本文件", Pattern: "*.txt"}}}
+	return app.SaveFileOptions{Title: i18n.T("保存文字", "Save Text"), SuggestedName: TextSaveName(t), DefaultExtension: "txt",
+		Filters: []app.FileFilter{{Name: i18n.T("文本文件", "Text File"), Pattern: "*.txt"}}}
 }
 
 // fileExt is the extension raster.EncodeFile gives a JPEG quality (0: PNG).

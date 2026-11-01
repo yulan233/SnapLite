@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"image"
+	"image/color"
 	"image/draw"
 	"image/jpeg"
 	"image/png"
@@ -194,9 +195,7 @@ func Shrink(src *image.RGBA, tw, th int) *image.RGBA {
 // Compose copies base and paints the shapes onto it, anti-aliased.
 func Compose(base *image.RGBA, shapes []annotate.Shape) *image.RGBA {
 	out := Crop(base, base.Bounds())
-	for _, s := range shapes {
-		paintShape(out, s, base.Bounds().Min)
-	}
+	paintShapes(out, shapes, base.Bounds().Min)
 	return out
 }
 
@@ -204,10 +203,32 @@ func Compose(base *image.RGBA, shapes []annotate.Shape) *image.RGBA {
 // larger image onto a crop of it whose top-left corner was at origin.
 func ComposeOffset(crop *image.RGBA, shapes []annotate.Shape, origin image.Point) *image.RGBA {
 	out := Crop(crop, crop.Bounds())
-	for _, s := range shapes {
-		paintShape(out, s, origin)
-	}
+	paintShapes(out, shapes, origin)
 	return out
+}
+
+// paintShapes paints the mosaics first, under every other shape, as the
+// overlay draws them.
+func paintShapes(img *image.RGBA, shapes []annotate.Shape, origin image.Point) {
+	for _, s := range shapes {
+		if s.Tool == annotate.ToolMosaic {
+			paintMosaic(img, s, origin)
+		}
+	}
+	for _, s := range shapes {
+		if s.Tool != annotate.ToolMosaic {
+			paintShape(img, s, origin)
+		}
+	}
+}
+
+// paintMosaic fills a mosaic's blocks with their colours.
+func paintMosaic(img *image.RGBA, s annotate.Shape, origin image.Point) {
+	for _, c := range s.Cells {
+		r := image.Rect(c.X, c.Y, c.X+s.Block, c.Y+s.Block).Sub(origin).Intersect(img.Bounds())
+		col := color.RGBA{R: c.Color.R, G: c.Color.G, B: c.Color.B, A: c.Color.A}
+		draw.Draw(img, r, image.NewUniform(col), image.Point{}, draw.Src)
+	}
 }
 
 // mask is the coverage of one shape over a rectangle of the image.
