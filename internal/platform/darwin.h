@@ -19,12 +19,10 @@ void sl_wake_main(void);
 
 int sl_displays(sl_display *out, int max);
 
-// sl_capture captures a display (has_rect == 0) or a logical rectangle of it
-// relative to the display's origin. It blocks and must not run on the main
+// sl_capture captures a whole display. It blocks and must not run on the main
 // thread. On success *pix is malloc'ed RGBA the caller frees.
 // Returns 0 on success, 1 when permission is missing, 2 on other failures.
-int sl_capture(uint32_t display, int has_rect, double rx, double ry, double rw, double rh,
-               uint8_t **pix, int *width, int *height, int *stride);
+int sl_capture(uint32_t display, uint8_t **pix, int *width, int *height, int *stride);
 void sl_prefetch_content(void);
 
 int sl_has_screen_permission(void);
@@ -35,7 +33,6 @@ void sl_open_url(const char *url);
 void sl_reveal(const char *path);
 
 int sl_raise_overlay(const char *title, double x, double y, double w, double h);
-int sl_exclude_from_capture(const char *title);
 int sl_float_window(const char *title, double x, double y, double w, double h);
 void sl_activate(void);
 int sl_list_windows(sl_rect *out, int max, int exclude_own);
@@ -48,9 +45,10 @@ long sl_change_count(void);
 void sl_watch_clipboard(int on);
 int sl_clipboard_concealed(void);
 
-int sl_scroll(double x, double y, double dy);
-int sl_move_cursor(double x, double y);
 void sl_cursor_position(double *x, double *y);
 
 int sl_launch_at_login(void);
 int sl_set_launch_at_login(int enabled);
+
+void sl_save_front_app(void);
+int sl_paste_to_saved_app(void);

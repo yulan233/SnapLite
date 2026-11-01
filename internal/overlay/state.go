@@ -36,7 +36,6 @@ const (
 // State is one overlay window: one display of the session.
 type State struct {
 	Phase     Phase
-	Mode      capture.Mode
 	Frame     *capture.Frame
 	Sel       vui.Rect // window logical pixels, normalised
 	Drag      Drag
@@ -63,8 +62,8 @@ type State struct {
 	hintStarted bool
 }
 
-func newState(frame *capture.Frame, mode capture.Mode) *State {
-	return &State{Frame: frame, Mode: mode, Doc: annotate.NewDocument()}
+func newState(frame *capture.Frame) *State {
+	return &State{Frame: frame, Doc: annotate.NewDocument()}
 }
 
 // size is the overlay window's logical size.

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"snaplite/internal/platform"
@@ -14,7 +15,7 @@ func TestLoadWritesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Hotkeys.Capture != Default().Hotkeys.Capture || c.History.MaxItems != 100 || c.History.MaxBytes != 500<<20 || !c.History.Enabled || c.LongShot.Mode != "auto" || c.LongShot.MaxHeight != 30000 {
+	if c.Hotkeys.Capture != Default().Hotkeys.Capture || c.History.MaxItems != 100 || c.History.MaxBytes != 500<<20 || !c.History.Enabled || c.Capture.Quality != QualityPNG || c.Capture.Scale != ScaleOriginal {
 		t.Fatalf("defaults = %+v", c)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -108,13 +109,13 @@ func TestFormatHotkey(t *testing.T) {
 
 func TestPlatformDefaults(t *testing.T) {
 	mac, win := DefaultFor("darwin").Hotkeys, DefaultFor("windows").Hotkeys
-	if mac.Capture != "Option+F1" || mac.LongShot != "Option+F2" || mac.History != "Option+F3" {
+	if mac.Capture != "Option+F1" || mac.History != "Option+F2" {
 		t.Errorf("darwin defaults = %+v", mac)
 	}
-	if win.Capture != "RightAlt+F1" || win.LongShot != "RightAlt+F2" || win.History != "RightAlt+F3" {
+	if win.Capture != "RightAlt+F1" || win.History != "RightAlt+F2" {
 		t.Errorf("windows defaults = %+v", win)
 	}
-	for _, s := range []string{mac.Capture, mac.LongShot, mac.History, win.Capture, win.LongShot, win.History} {
+	for _, s := range []string{mac.Capture, mac.History, win.Capture, win.History} {
 		if _, err := ParseHotkey(s); err != nil {
 			t.Errorf("default %q does not parse: %v", s, err)
 		}
@@ -134,9 +135,6 @@ func TestLoadMigratesOldDefaultHotkeys(t *testing.T) {
 	d := Default().Hotkeys
 	if c.Hotkeys.Capture != d.Capture || c.Hotkeys.History != d.History {
 		t.Fatalf("old defaults kept: %+v", c.Hotkeys)
-	}
-	if c.Hotkeys.LongShot != "Ctrl+Alt+L" {
-		t.Fatalf("a hotkey the user chose was replaced: %q", c.Hotkeys.LongShot)
 	}
 	again, err := LoadFrom(path)
 	if err != nil || again.Hotkeys.Capture != d.Capture {
@@ -167,5 +165,68 @@ func TestSpecForRoundTrips(t *testing.T) {
 		if err != nil || back != c.h {
 			t.Errorf("ParseHotkey(%q) = %+v, %v; want %+v", got, back, err, c.h)
 		}
+	}
+}
+
+// The history hotkey moved from F3 to F2 when the long shot went away; a file
+// still holding the old default (on either platform) gets the new one, and the
+// long shot's hotkey and settings drop out of the file.
+func TestLoadMigratesHistoryHotkeyAndDropsLongShot(t *testing.T) {
+	for _, old := range []string{"Option+F3", "RightAlt+F3", "CmdOrCtrl+Shift+V"} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		data := `{"hotkeys":{"capture":"Ctrl+Alt+1","longshot":"Option+F2","history":"` + old + `"},"longshot":{"mode":"manual","maxHeight":5000}}`
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		c, err := LoadFrom(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Hotkeys.History != Default().Hotkeys.History || c.Hotkeys.Capture != "Ctrl+Alt+1" {
+			t.Fatalf("%s: hotkeys after loading = %+v", old, c.Hotkeys)
+		}
+		written, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(written), old) || strings.Contains(string(written), "longshot") {
+			t.Fatalf("%s: the file was not rewritten: %s", old, written)
+		}
+	}
+	// A history hotkey the user chose stays, and so does an old default the
+	// new one would collide with.
+	path := filepath.Join(t.TempDir(), "config.json")
+	clash := Default().Hotkeys.History
+	if err := os.WriteFile(path, []byte(`{"hotkeys":{"capture":"`+clash+`","history":"Option+F3"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadFrom(path)
+	if err != nil || c.Hotkeys.History != "Option+F3" || c.Hotkeys.Capture != clash {
+		t.Fatalf("a clashing migration happened: %v %+v", err, c.Hotkeys)
+	}
+}
+
+func TestCaptureSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"capture":{"quality":"best","scale":"2x"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadFrom(path)
+	if err != nil || c.Capture.Quality != QualityPNG || c.Capture.Scale != ScaleOriginal || c.JPEGQuality() != 0 {
+		t.Fatalf("invalid capture settings not reset: %v %+v", err, c.Capture)
+	}
+	for q, want := range map[string]int{QualityHigh: 92, QualityMedium: 80, QualityLow: 60, QualityPNG: 0} {
+		c.Capture.Quality = q
+		if got := c.JPEGQuality(); got != want {
+			t.Errorf("JPEGQuality(%s) = %d, want %d", q, got, want)
+		}
+	}
+	c.Capture.Quality, c.Capture.Scale = QualityLow, Scale1x
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := LoadFrom(path)
+	if err != nil || again.Capture.Quality != QualityLow || again.Capture.Scale != Scale1x {
+		t.Fatalf("round trip: %v %+v", err, again.Capture)
 	}
 }

@@ -22,14 +22,14 @@ type rig struct {
 	results []Result
 }
 
-func newRig(t *testing.T, mode capture.Mode) *rig {
+func newRig(t *testing.T) *rig {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, 1600, 1200))
 	for i := 0; i < len(img.Pix); i += 4 {
 		img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = uint8(i/4%251), 90, 160, 255
 	}
 	display := platform.Display{ID: 3, Bounds: platform.Rect{W: 800, H: 600}, Scale: 2, Primary: true}
-	session := &capture.Session{Frames: []capture.Frame{capture.NewFrame(display, img)}, Mode: mode,
+	session := &capture.Session{Frames: []capture.Frame{capture.NewFrame(display, img)},
 		Windows: []platform.Rect{{X: 500, Y: 400, W: 200, H: 150}}}
 	r := &rig{t: t}
 	r.c = NewController(session, sui.Light(), func(res Result) { r.results = append(r.results, res) })
@@ -107,7 +107,7 @@ func (r *rig) toolbarHits() int {
 }
 
 func TestInitialHint(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	if !r.hasLabel("拖动选择区域") {
 		t.Fatal("the hint capsule is shown at first")
 	}
@@ -125,7 +125,7 @@ func TestInitialHint(t *testing.T) {
 }
 
 func TestDragShowsSizeAndToolbar(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.must(r.d.Press(100, 100, vui.PointerButtonPrimary))
 	r.must(r.d.Move(400, 300))
 	if !r.hasLabel("600 × 400") {
@@ -135,7 +135,7 @@ func TestDragShowsSizeAndToolbar(t *testing.T) {
 		t.Fatal("no toolbar while dragging")
 	}
 	r.must(r.d.Release(400, 300, vui.PointerButtonPrimary))
-	for _, label := range []string{"完成", "保存", "取消", "矩形", "撤销", "长截图"} {
+	for _, label := range []string{"完成", "保存", "取消", "矩形", "撤销", "钉住"} {
 		if _, ok := r.hitLabelled(label); !ok {
 			t.Fatalf("toolbar has no %q", label)
 		}
@@ -151,7 +151,7 @@ func TestDragShowsSizeAndToolbar(t *testing.T) {
 }
 
 func TestResizeAndMove(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.drag(100, 100, 400, 300)
 	r.drag(400, 300, 500, 350) // bottom-right handle
 	if !r.hasLabel("800 × 500") {
@@ -174,7 +174,7 @@ func TestResizeAndMove(t *testing.T) {
 }
 
 func TestRectangleUndoRedo(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.drag(100, 100, 400, 300)
 	r.click(sui.ButtonID(sui.ActRect))
 	if r.state().Doc.Tool != 1 {
@@ -219,7 +219,7 @@ func TestRectangleUndoRedo(t *testing.T) {
 }
 
 func TestEnterFinishes(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.drag(100, 100, 400, 300)
 	r.click(sui.ButtonID(sui.ActArrow))
 	r.drag(120, 120, 300, 250)
@@ -238,7 +238,7 @@ func TestEnterFinishes(t *testing.T) {
 }
 
 func TestEscape(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.drag(100, 100, 400, 300)
 	r.click(sui.ButtonID(sui.ActPen))
 	r.must(r.d.Press(150, 150, vui.PointerButtonPrimary))
@@ -258,12 +258,12 @@ func TestEscape(t *testing.T) {
 }
 
 func TestSecondaryClickAndDoubleClick(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.must(r.d.ClickButton(50, 50, vui.PointerButtonSecondary))
 	if len(r.results) != 1 || r.results[0].Kind != Cancel {
 		t.Fatal("a right click with nothing selected cancels")
 	}
-	r = newRig(t, capture.ModeRegion)
+	r = newRig(t)
 	r.drag(100, 100, 400, 300)
 	r.must(r.d.DoubleClick(200, 200))
 	if len(r.results) != 1 || r.results[0].Kind != Done {
@@ -272,27 +272,21 @@ func TestSecondaryClickAndDoubleClick(t *testing.T) {
 }
 
 func TestSaveShortcutAndButton(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.drag(100, 100, 400, 300)
 	if handled, _ := r.d.ShortcutChord(vui.ModifierMeta, 's'); !handled || len(r.results) != 1 || r.results[0].Kind != Save {
 		t.Fatalf("Cmd+S: %+v", r.results)
 	}
-	r = newRig(t, capture.ModeRegion)
-	r.drag(100, 100, 400, 300)
-	r.click(sui.ButtonID(sui.ActLongShot))
-	if len(r.results) != 1 || r.results[0].Kind != LongShot {
-		t.Fatalf("long-shot button: %+v", r.results)
-	}
 }
 
 func TestToolbarPlacementInWindow(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.drag(100, 450, 400, 590) // near the bottom
 	done, _ := r.hit(sui.ButtonID(sui.ActDone))
 	if done.Bounds.Y+done.Bounds.Height > 450 {
 		t.Fatalf("toolbar should be above the selection: %+v", done.Bounds)
 	}
-	r = newRig(t, capture.ModeRegion)
+	r = newRig(t)
 	r.drag(0, 0, 800, 600) // the whole screen
 	done, _ = r.hit(sui.ButtonID(sui.ActDone))
 	if done.Bounds.Y < 500 || done.Bounds.Y+done.Bounds.Height > 600 {
@@ -300,24 +294,36 @@ func TestToolbarPlacementInWindow(t *testing.T) {
 	}
 }
 
-func TestLongShotMode(t *testing.T) {
-	r := newRig(t, capture.ModeLongShot)
-	if !r.hasLabel("框选要滚动的区域") {
-		t.Fatal("long-shot hint")
+// The pin button ends the session with the selection and its annotations,
+// in image pixels and in window pixels, so the shell can pin the composed
+// picture exactly where the selection was.
+func TestPinButton(t *testing.T) {
+	r := newRig(t)
+	r.drag(100, 100, 400, 300)
+	r.click(sui.ButtonID(sui.ActRect))
+	r.drag(150, 150, 250, 220)
+	h, ok := r.hit(sui.ButtonID(sui.ActPin))
+	if !ok || h.Label != "钉住" {
+		t.Fatal("the toolbar has a pin button")
 	}
-	r.must(r.d.Press(100, 100, vui.PointerButtonPrimary))
-	r.must(r.d.Move(300, 400))
-	if _, ok := r.hitLabelled("矩形"); ok {
-		t.Fatal("no annotation tools in long-shot mode")
-	}
-	r.must(r.d.Release(300, 400, vui.PointerButtonPrimary))
-	if len(r.results) != 1 || r.results[0].Kind != LongShot || r.results[0].Sel != image.Rect(200, 200, 600, 800) {
+	r.click(sui.ButtonID(sui.ActPin))
+	if len(r.results) != 1 {
 		t.Fatalf("results = %+v", r.results)
+	}
+	res := r.results[0]
+	if res.Kind != Pin || res.Sel != image.Rect(200, 200, 800, 600) || len(res.Shapes) != 1 || res.Frame == nil {
+		t.Fatalf("pin result = %+v", res)
+	}
+	if res.SelWindow != (vui.Rect{X: 100, Y: 100, Width: 300, Height: 200}) {
+		t.Fatalf("pin window rectangle = %+v", res.SelWindow)
+	}
+	if got := res.Frame.ScreenRect(res.SelWindow); got != (platform.Rect{X: 100, Y: 100, W: 300, H: 200}) {
+		t.Fatalf("pin screen rectangle = %+v", got)
 	}
 }
 
 func TestWindowSnapAndTinySelection(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.must(r.d.Move(600, 450))
 	if !r.state().HasSnap {
 		t.Fatal("the window under the pointer is a snap candidate")
@@ -326,7 +332,7 @@ func TestWindowSnapAndTinySelection(t *testing.T) {
 	if s := r.state().Sel; r.state().Phase != PhaseEditing || s.X != 500 || s.Width != 200 {
 		t.Fatalf("a click selects the window: %+v", s)
 	}
-	r = newRig(t, capture.ModeRegion)
+	r = newRig(t)
 	r.drag(10, 10, 12, 12)
 	if r.state().Phase != PhaseIdle {
 		t.Fatal("a tiny drag returns to idle")
@@ -334,7 +340,7 @@ func TestWindowSnapAndTinySelection(t *testing.T) {
 }
 
 func TestMagnifierColourCopy(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.must(r.d.Move(10, 10))
 	if r.state().pixel == "" || !r.hasLabel("#") {
 		t.Fatal("the magnifier shows the colour under the pointer")
@@ -376,7 +382,7 @@ func TestPlaceToolbar(t *testing.T) {
 
 func BenchmarkPaintEditing(b *testing.B) {
 	t := &testing.T{}
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.drag(100, 100, 400, 300)
 	r.click(sui.ButtonID(sui.ActRect))
 	r.drag(150, 150, 250, 220)
@@ -394,7 +400,7 @@ func BenchmarkPaintEditing(b *testing.B) {
 // be the backdrop, or it covers the mask, the selection and the toolbar (the
 // overlay looked like a plain frozen screen on a real Mac).
 func TestFrozenPictureIsBackdrop(t *testing.T) {
-	r := newRig(t, capture.ModeRegion)
+	r := newRig(t)
 	r.drag(100, 100, 400, 300)
 	id := r.c.States[0].Frame.Bitmap.ID
 	found := false

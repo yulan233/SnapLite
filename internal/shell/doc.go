@@ -1,2 +1,2 @@
-// Package shell is the application shell: tray, hotkeys and the capture, long-shot and history flows.
+// Package shell is the application shell: tray, hotkeys and the capture, pin and history flows.
 package shell

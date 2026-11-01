@@ -151,8 +151,7 @@ static int sl_capture_failure(NSString *step, NSError *error) {
     return CGPreflightScreenCaptureAccess() ? 2 : 1;
 }
 
-int sl_capture(uint32_t id, int has_rect, double rx, double ry, double rw, double rh,
-               uint8_t **pix, int *width, int *height, int *stride) {
+int sl_capture(uint32_t id, uint8_t **pix, int *width, int *height, int *stride) {
     @autoreleasepool {
         *pix = NULL;
         // No CGPreflightScreenCaptureAccess gate here: it caches its answer for
@@ -182,14 +181,8 @@ int sl_capture(uint32_t id, int has_rect, double rx, double ry, double rw, doubl
                                                           exceptingWindows:@[]];
         double scale = sl_display_scale(id);
         SCStreamConfiguration *config = [[SCStreamConfiguration alloc] init];
-        if (has_rect) {
-            config.sourceRect = CGRectMake(rx, ry, rw, rh);
-            config.width = (size_t)llround(rw * scale);
-            config.height = (size_t)llround(rh * scale);
-        } else {
-            config.width = (size_t)llround(display.width * scale);
-            config.height = (size_t)llround(display.height * scale);
-        }
+        config.width = (size_t)llround(display.width * scale);
+        config.height = (size_t)llround(display.height * scale);
         config.showsCursor = NO;
         config.pixelFormat = kCVPixelFormatType_32BGRA;
         config.captureResolution = SCCaptureResolutionBest;
@@ -330,12 +323,16 @@ int sl_raise_overlay(const char *title, double x, double y, double w, double h) 
 }
 
 // sl_float_window keeps a window above other applications' windows without
-// activating SnapLite, so the window being scrolled keeps the focus.
+// activating SnapLite, so the application in front keeps the keyboard. The
+// window may become key when it is clicked (a borderless window cannot by
+// default), so a pin can take Escape once the user has clicked it.
 int sl_float_window(const char *title, double x, double y, double w, double h) {
     NSWindow *window = sl_find_window(title);
     if (window == nil) {
         return 1;
     }
+    sl_install_keyable();
+    objc_setAssociatedObject(window, &sl_keyable, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     window.level = NSStatusWindowLevel;
     window.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
                                 NSWindowCollectionBehaviorFullScreenAuxiliary |
@@ -344,15 +341,6 @@ int sl_float_window(const char *title, double x, double y, double w, double h) {
     CGFloat primaryHeight = CGDisplayBounds(CGMainDisplayID()).size.height;
     [window setFrame:NSMakeRect(x, primaryHeight - (y + h), w, h) display:YES];
     [window orderFrontRegardless];
-    return 0;
-}
-
-int sl_exclude_from_capture(const char *title) {
-    NSWindow *window = sl_find_window(title);
-    if (window == nil) {
-        return 1;
-    }
-    window.sharingType = NSWindowSharingNone;
     return 0;
 }
 
@@ -496,26 +484,7 @@ int sl_clipboard_concealed(void) {
     return 0;
 }
 
-// ---- input injection -------------------------------------------------------
-
-int sl_scroll(double x, double y, double dy) {
-    CGEventRef event = CGEventCreateScrollWheelEvent2(NULL, kCGScrollEventUnitPixel, 1, (int32_t)llround(-dy), 0, 0);
-    if (event == NULL) {
-        return 1;
-    }
-    CGEventSetLocation(event, CGPointMake(x, y));
-    CGEventPost(kCGHIDEventTap, event);
-    CFRelease(event);
-    return 0;
-}
-
-int sl_move_cursor(double x, double y) {
-    if (CGWarpMouseCursorPosition(CGPointMake(x, y)) != kCGErrorSuccess) {
-        return 1;
-    }
-    CGAssociateMouseAndMouseCursorPosition(true);
-    return 0;
-}
+// ---- pointer position -------------------------------------------------------
 
 void sl_cursor_position(double *x, double *y) {
     CGEventRef event = CGEventCreate(NULL);
@@ -551,3 +520,48 @@ int sl_set_launch_at_login(int enabled) {
 }
 
 #pragma clang diagnostic pop
+
+// ---- quick paste -------------------------------------------------------------
+
+static NSRunningApplication *sl_saved_app;
+
+// sl_save_front_app remembers the application in front, unless it is SnapLite,
+// so a paste can go back to it after the history panel closes.
+void sl_save_front_app(void) {
+    NSRunningApplication *front = NSWorkspace.sharedWorkspace.frontmostApplication;
+    if (front != nil && front.processIdentifier != getpid()) {
+        sl_saved_app = front;
+    }
+}
+
+// sl_paste_to_saved_app hands the focus back to the remembered application and,
+// once it is in front, presses Command+V there. Posting keys needs the
+// Accessibility permission: 1 without it.
+int sl_paste_to_saved_app(void) {
+    if (!AXIsProcessTrusted()) {
+        return 1;
+    }
+    [NSApp hide:nil];
+    NSRunningApplication *target = sl_saved_app;
+    if (target != nil) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        [target activateWithOptions:0];
+#pragma clang diagnostic pop
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStateCombinedSessionState);
+        CGEventRef down = CGEventCreateKeyboardEvent(source, (CGKeyCode)kVK_ANSI_V, true);
+        CGEventRef up = CGEventCreateKeyboardEvent(source, (CGKeyCode)kVK_ANSI_V, false);
+        CGEventSetFlags(down, kCGEventFlagMaskCommand);
+        CGEventSetFlags(up, kCGEventFlagMaskCommand);
+        CGEventPost(kCGHIDEventTap, down);
+        CGEventPost(kCGHIDEventTap, up);
+        CFRelease(down);
+        CFRelease(up);
+        if (source != NULL) {
+            CFRelease(source);
+        }
+    });
+    return 0;
+}

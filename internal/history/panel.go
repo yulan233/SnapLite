@@ -21,6 +21,16 @@ var (
 	listID        = sui.Tree.ID(panelFeature, "list")
 	clearID       = sui.Tree.ID(panelFeature, "clear")
 	rows          = sui.Tree.Sub(panelFeature, sui.Tree.Name("rows"))
+	copyButtons   = sui.Tree.Sub(panelFeature, sui.Tree.Name("copy"))
+	pasteButtons  = sui.Tree.Sub(panelFeature, sui.Tree.Name("paste"))
+	pinButtons    = sui.Tree.Sub(panelFeature, sui.Tree.Name("pin"))
+	menuScope     = sui.Tree.ID(panelFeature, "menu")
+	menuDismiss   = sui.Tree.ID(panelFeature, "menu-dismiss")
+	menuCopy      = sui.Tree.ID(panelFeature, "menu-copy")
+	menuPaste     = sui.Tree.ID(panelFeature, "menu-paste")
+	menuPin       = sui.Tree.ID(panelFeature, "menu-pin")
+	menuSave      = sui.Tree.ID(panelFeature, "menu-save")
+	menuDelete    = sui.Tree.ID(panelFeature, "menu-delete")
 	confirmScope  = sui.Tree.Sub(panelFeature, sui.Tree.Name("confirm"))
 	confirmFocus  = sui.Tree.ID(confirmScope, "scope")
 	confirmCancel = sui.Tree.ID(confirmScope, "cancel")
@@ -35,6 +45,8 @@ const (
 	textRowHeight  = 52
 	thumbMaxWidth  = 160
 	thumbMaxHeight = 96
+	menuWidth      = 168
+	menuLayer      = 20
 )
 
 // EmptyText is the empty state's message.
@@ -72,16 +84,33 @@ type Panel struct {
 	confirm  bool
 	closed   bool
 	pending  map[string]bool // thumbnails being made
+	// menu is the context menu, open on shown row menuRow at menuAt.
+	menu    components.ContextMenuState
+	menuRow int
+	menuAt  vui.Point
 
 	// OnClose asks the window to close (after a restore, Escape, or by the shell).
 	OnClose func()
+	// OnPaste runs instead of OnClose after an item was put on the clipboard to
+	// be pasted: the shell closes the panel and pastes into the application
+	// that was in front. Nil disables pasting.
+	OnPaste func()
+	// OnPin pins an item on the desktop and OnSave saves it to a file; the
+	// shell closes the panel first. Nil leaves the action out.
+	OnPin  func(Item)
+	OnSave func(Item)
+	// ClickPastes makes a click on an item (and Enter) paste it; otherwise
+	// they copy it and Command/Control+Enter pastes.
+	ClickPastes bool
+	// Mod is how the platform's command key is written in hints: "⌘" or "Ctrl+".
+	Mod string
 	// thumbs is how thumbnails are made; tests run it inline.
 	loadThumb func(id string)
 }
 
 // NewPanel makes the panel over a store. clip receives restored items.
 func NewPanel(store *Store, clip Clipboard, tokens sui.Tokens) *Panel {
-	p := &Panel{store: store, clip: clip, tokens: tokens, now: time.Now, editor: text.NewEditor(""), pending: map[string]bool{}}
+	p := &Panel{store: store, clip: clip, tokens: tokens, now: time.Now, editor: text.NewEditor(""), pending: map[string]bool{}, Mod: "⌘"}
 	p.loadThumb = func(id string) {
 		go func() {
 			_, _ = store.LoadThumbnail(id)
@@ -183,7 +212,9 @@ func (p *Panel) Config(anchor app.StatusAnchor) app.Config {
 		Title: "snaplite-history", WindowMode: app.WindowPanel, Anchor: anchor,
 		Width: PanelWidth, Height: PanelHeight, Tree: &sui.Tree,
 		Paint:       p.paint,
+		OnPointer:   p.pointer,
 		OnKey:       p.key,
+		OnShortcut:  p.shortcut,
 		OnScroll:    p.scroll,
 		TextInput:   p.textInput,
 		Invalidator: &p.wake,
@@ -234,13 +265,44 @@ func (p *Panel) Selected() (Item, bool) {
 	return p.all[p.shown[p.selected]].item, true
 }
 
-func (p *Panel) restore(i int) {
+// restore puts shown item i on the clipboard, then closes the panel, or with
+// paste set hands over to OnPaste to paste it where the user was.
+func (p *Panel) restore(i int, paste bool) {
 	if i < 0 || i >= len(p.shown) {
 		return
 	}
-	if err := p.store.Restore(p.all[p.shown[i]].item.ID, p.clip); err == nil {
-		p.close()
+	if err := p.store.Restore(p.all[p.shown[i]].item.ID, p.clip); err != nil {
+		return
 	}
+	if paste && p.OnPaste != nil {
+		p.OnPaste()
+		return
+	}
+	p.close()
+}
+
+// clickPastes is what a click or Enter does; the command key does the other.
+func (p *Panel) clickPastes() bool { return p.ClickPastes && p.OnPaste != nil }
+
+// commandKey is Command on macOS and Control on Windows, as Mod says.
+func (p *Panel) commandKey(m vui.Modifiers) bool {
+	if p.Mod == "⌘" {
+		return m&vui.ModifierMeta != 0
+	}
+	return m&vui.ModifierControl != 0
+}
+
+// shortcut takes Command/Control+1..9: paste the first nine shown items.
+func (p *Panel) shortcut(e vui.KeyEvent) vui.EventResult {
+	if p.confirm || p.menu.IsOpen() || !p.commandKey(e.Modifiers) || len(e.Text) != 1 || e.Text[0] < '1' || e.Text[0] > '9' {
+		return vui.EventResult{}
+	}
+	i := int(e.Text[0] - '1')
+	if i < len(p.shown) {
+		p.selected = i
+		p.restore(i, p.OnPaste != nil)
+	}
+	return vui.EventResult{Handled: true, Repaint: true}
 }
 
 func (p *Panel) deleteSelected() {
@@ -267,7 +329,8 @@ func (p *Panel) scrollTo(i int) {
 }
 
 func (p *Panel) key(e vui.KeyEvent) vui.EventResult {
-	if p.confirm {
+	if p.confirm || p.menu.IsOpen() {
+		// The dialog or the menu has the keyboard; Escape dismisses it.
 		return vui.EventResult{}
 	}
 	switch e.Key {
@@ -284,7 +347,8 @@ func (p *Panel) key(e vui.KeyEvent) vui.EventResult {
 		p.ensureThumbs()
 		return vui.EventResult{Handled: true, Repaint: true}
 	case vui.KeyEnter:
-		p.restore(p.selected)
+		paste := p.clickPastes() != p.commandKey(e.Modifiers)
+		p.restore(p.selected, paste && p.OnPaste != nil)
 		return vui.EventResult{Handled: true, Repaint: true}
 	case vui.KeyEscape:
 		p.close()
@@ -292,6 +356,26 @@ func (p *Panel) key(e vui.KeyEvent) vui.EventResult {
 	case vui.KeyDelete, vui.KeyBackspace:
 		if p.editor.RuneCount() == 0 {
 			p.deleteSelected()
+			return vui.EventResult{Handled: true, Repaint: true}
+		}
+	}
+	return vui.EventResult{}
+}
+
+// rowTargets are the identities a press on row i may land on.
+var rowTargets = [...]vui.Scope{rows, copyButtons, pasteButtons, pinButtons}
+
+// pointer opens the context menu where a row is pressed with the secondary
+// button. A press while a menu is open first dismisses it (the menu's
+// backdrop passes secondary presses on), so the press opens a new one.
+func (p *Panel) pointer(e vui.PointerEvent) vui.EventResult {
+	if e.Kind != vui.PointerDown || e.Button != vui.PointerButtonSecondary || p.confirm || p.menu.IsOpen() {
+		return vui.EventResult{}
+	}
+	for _, scope := range rowTargets {
+		if i, ok := e.Target.In(scope); ok && i < len(p.shown) {
+			p.selected = i
+			p.menu, p.menuRow, p.menuAt = p.menu.Open(), i, vui.Point{X: e.X, Y: e.Y}
 			return vui.EventResult{Handled: true, Repaint: true}
 		}
 	}
@@ -308,7 +392,9 @@ func (p *Panel) paint(canvas *vui.Canvas, size vui.Size) {
 	t := p.tokens
 	bounds := vui.Rect{Width: size.Width, Height: size.Height}
 	canvas.Rounded(bounds, sui.RadiusSurface, t.Surface)
-	canvas.RequestFocus(searchID)
+	if !p.menu.IsOpen() {
+		canvas.RequestFocus(searchID)
+	}
 	p.view.Draw(canvas, t.VivaTheme(), bounds, func(f *flex.Frame) {
 		f.Column().Fill().Children(func() {
 			f.Row().Height(52).PadX(12).Items(flex.Center).Children(func() {
@@ -330,8 +416,11 @@ func (p *Panel) paint(canvas *vui.Canvas, size vui.Size) {
 				f.ScrollArea(listID).Grow(1).Children(func() { p.paintRows(f, canvas) })
 			}
 			f.Divider()
-			f.Row().Height(36).PadX(12).Items(flex.Center).Children(func() {
+			f.Row().Height(36).PadX(12).Gap(10).Items(flex.Center).Children(func() {
 				f.Text(p.count).Muted().FontSize(sui.MutedTextSize)
+				if hint := p.hint(); hint != "" {
+					f.Text(hint).Muted().FontSize(sui.MutedTextSize)
+				}
 				f.Spacer()
 				if f.Button(clearID, "清空历史").Ghost().Destructive().Small().Disabled(len(p.all) == 0).Clicked() {
 					canvas.AfterPaint(func() { p.confirm = true })
@@ -358,6 +447,87 @@ func (p *Panel) paint(canvas *vui.Canvas, size vui.Size) {
 			}
 		}
 	})
+	if p.menu.IsOpen() {
+		p.paintMenu(canvas, bounds)
+	}
+}
+
+// menuItems is the context menu of a row: 复制, 粘贴, 钉到桌面 and 保存到本地…
+// as far as the shell offers them, then 删除.
+func (p *Panel) menuItems() []components.ContextMenuItem {
+	items := []components.ContextMenuItem{{ID: menuCopy, Label: "复制"}}
+	if p.OnPaste != nil {
+		items = append(items, components.ContextMenuItem{ID: menuPaste, Label: "粘贴"})
+	}
+	if p.OnPin != nil {
+		items = append(items, components.ContextMenuItem{ID: menuPin, Label: "钉到桌面"})
+	}
+	if p.OnSave != nil {
+		items = append(items, components.ContextMenuItem{ID: menuSave, Label: "保存到本地…"})
+	}
+	return append(items, components.ContextMenuItem{ID: menuDelete, Label: "删除", Variant: components.ContextMenuItemDestructive})
+}
+
+// paintMenu draws the open context menu at the pointer, kept inside the panel;
+// a press outside it or Escape closes it.
+func (p *Panel) paintMenu(canvas *vui.Canvas, bounds vui.Rect) {
+	items := p.menuItems()
+	// The rows, the separator before 删除 and the surface's padding.
+	height := float32(len(items))*32 + 9 + 2*4
+	menu := components.BeginContextMenu(canvas, p.tokens.VivaTheme(), vui.Rect{X: p.menuAt.X, Y: p.menuAt.Y, Width: menuWidth, Height: height},
+		components.ContextMenuOptions{Layer: menuLayer, Scope: menuScope, DismissID: menuDismiss, Viewport: bounds})
+	for _, item := range items {
+		if item.ID == menuDelete {
+			menu.AddSeparator()
+		}
+		menu.AddItem(item)
+	}
+	menu.End()
+	i := p.menuRow
+	act := func(fn func()) {
+		canvas.AfterPaint(func() {
+			p.menu = p.menu.Close()
+			if fn != nil && i < len(p.shown) {
+				fn()
+			}
+		})
+	}
+	item := func() Item { return p.all[p.shown[i]].item }
+	switch {
+	case canvas.Clicked(menuCopy):
+		act(func() { p.restore(i, false) })
+	case canvas.Clicked(menuPaste):
+		act(func() { p.restore(i, true) })
+	case canvas.Clicked(menuPin):
+		act(func() { p.OnPin(item()) })
+	case canvas.Clicked(menuSave):
+		act(func() { p.OnSave(item()) })
+	case canvas.Clicked(menuDelete):
+		act(func() {
+			_ = p.store.Delete(item().ID)
+			p.refresh()
+		})
+	case canvas.Clicked(menuDismiss):
+		act(nil)
+	}
+}
+
+// hint is the keyboard help in the footer: "↵ 复制 · ⌘↵ 粘贴". The rows show
+// their own quick-paste chords (⌘1..⌘9).
+func (p *Panel) hint() string {
+	if p.OnPaste == nil {
+		return "↵ 复制"
+	}
+	if p.clickPastes() {
+		return fmt.Sprintf("↵ 粘贴 · %s↵ 复制", p.Mod)
+	}
+	return fmt.Sprintf("↵ 复制 · %s↵ 粘贴", p.Mod)
+}
+
+// rowActive reports whether row i shows its buttons: selected or hovered.
+func (p *Panel) rowActive(canvas *vui.Canvas, i int) bool {
+	h := canvas.Hovered()
+	return i == p.selected || h == rows.At(i) || h == copyButtons.At(i) || h == pasteButtons.At(i) || h == pinButtons.At(i)
 }
 
 func (p *Panel) paintRows(f *flex.Frame, canvas *vui.Canvas) {
@@ -384,18 +554,35 @@ func (p *Panel) paintRows(f *flex.Frame, canvas *vui.Canvas) {
 					f.Paragraph(r.preview, 2).FontSize(sui.BodyTextSize)
 				})
 			}
+			if p.rowActive(canvas, i) {
+				// The selected or hovered row offers both actions.
+				if f.Button(copyButtons.At(i), "复制").Outline().Small().Clicked() {
+					canvas.AfterPaint(func() { p.selected = i; p.restore(i, false) })
+				}
+				if p.OnPin != nil && f.Button(pinButtons.At(i), "钉住").Outline().Small().Clicked() {
+					canvas.AfterPaint(func() { p.selected = i; p.OnPin(r.item) })
+				}
+				if p.OnPaste != nil && f.Button(pasteButtons.At(i), "粘贴").Small().Clicked() {
+					canvas.AfterPaint(func() { p.selected = i; p.restore(i, true) })
+				}
+				return
+			}
 			f.Column().Items(flex.End).Gap(2).Children(func() {
-				f.Text(r.age).Muted().FontSize(sui.MutedTextSize)
+				f.Row().Gap(6).Children(func() {
+					if i < 9 && p.OnPaste != nil {
+						f.Text(fmt.Sprintf("%s%d", p.Mod, i+1)).Muted().FontSize(sui.MutedTextSize)
+					}
+					f.Text(r.age).Muted().FontSize(sui.MutedTextSize)
+				})
 				if r.item.Kind == KindText {
 					f.Text(r.detail).Muted().FontSize(sui.MutedTextSize)
 				}
 			})
 		}).Clicked()
 		if clicked {
-			i := i
 			canvas.AfterPaint(func() {
 				p.selected = i
-				p.restore(i)
+				p.restore(i, p.clickPastes())
 			})
 		}
 	}

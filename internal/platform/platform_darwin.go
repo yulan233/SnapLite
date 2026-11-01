@@ -77,14 +77,10 @@ func Displays() ([]Display, error) {
 	return out, nil
 }
 
-func capture(id uint32, hasRect bool, r Rect) (*image.RGBA, error) {
+func capture(id uint32) (*image.RGBA, error) {
 	var pix *C.uint8_t
 	var w, h, stride C.int
-	flag := C.int(0)
-	if hasRect {
-		flag = 1
-	}
-	status := C.sl_capture(C.uint32_t(id), flag, C.double(r.X), C.double(r.Y), C.double(r.W), C.double(r.H), &pix, &w, &h, &stride)
+	status := C.sl_capture(C.uint32_t(id), &pix, &w, &h, &stride)
 	switch status {
 	case 0:
 	case 1:
@@ -100,22 +96,7 @@ func capture(id uint32, hasRect bool, r Rect) (*image.RGBA, error) {
 // CaptureDisplay captures a whole display in physical pixels without the
 // pointer and without SnapLite's own windows. It blocks: never call it on the
 // main thread.
-func CaptureDisplay(id uint32) (*image.RGBA, error) { return capture(id, false, Rect{}) }
-
-// CaptureRect captures a logical rectangle of one display. It blocks.
-func CaptureRect(displayID uint32, rect Rect) (*image.RGBA, error) {
-	ds, err := Displays()
-	if err != nil {
-		return nil, err
-	}
-	for _, d := range ds {
-		if d.ID == displayID {
-			local := Rect{X: rect.X - d.Bounds.X, Y: rect.Y - d.Bounds.Y, W: rect.W, H: rect.H}
-			return capture(displayID, true, local)
-		}
-	}
-	return nil, fmt.Errorf("platform: display %d not found", displayID)
-}
+func CaptureDisplay(id uint32) (*image.RGBA, error) { return capture(id) }
 
 // PrefetchCaptureContent refreshes the cached shareable-content list in the
 // background so the next capture starts faster.
@@ -156,22 +137,14 @@ func RaiseOverlay(title string, bounds Rect) error {
 	return nil
 }
 
-// FloatWindow keeps SnapLite's window titled title above other windows at
-// bounds without taking the keyboard from the application in front.
+// FloatWindow keeps SnapLite's window titled title above other windows, on
+// every Space, at bounds, without taking the keyboard from the application in
+// front. Calling it again moves the window. A click lets the window become
+// key, so it can receive Escape.
 func FloatWindow(title string, bounds Rect) error {
 	s := C.CString(title)
 	defer C.free(unsafe.Pointer(s))
 	if C.sl_float_window(s, C.double(bounds.X), C.double(bounds.Y), C.double(bounds.W), C.double(bounds.H)) != 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// SetExcludedFromCapture keeps the window out of screenshots.
-func SetExcludedFromCapture(title string) error {
-	s := C.CString(title)
-	defer C.free(unsafe.Pointer(s))
-	if C.sl_exclude_from_capture(s) != 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -267,21 +240,6 @@ func WatchClipboard(fn func()) (func(), error) {
 
 func ClipboardConcealed() bool { return C.sl_clipboard_concealed() != 0 }
 
-// ScrollAt posts a pixel scroll at a screen point; positive dy scrolls down.
-func ScrollAt(x, y, dy float64) error {
-	if C.sl_scroll(C.double(x), C.double(y), C.double(dy)) != 0 {
-		return fmt.Errorf("platform: scroll event failed")
-	}
-	return nil
-}
-
-func MoveCursor(x, y float64) error {
-	if C.sl_move_cursor(C.double(x), C.double(y)) != 0 {
-		return fmt.Errorf("platform: moving the pointer failed")
-	}
-	return nil
-}
-
 // CursorPosition is the pointer in screen logical coordinates.
 func CursorPosition() (float64, float64) {
 	var x, y C.double
@@ -308,3 +266,17 @@ func LaunchAtLogin() bool { return C.sl_launch_at_login() == 1 }
 
 // RightAltDown is false: macOS hotkeys do not distinguish the Option keys.
 func RightAltDown() bool { return false }
+
+// SaveForegroundApp remembers the application in front (not SnapLite) as the
+// target of PasteToSavedApp. Main thread only.
+func SaveForegroundApp() { C.sl_save_front_app() }
+
+// PasteToSavedApp brings the remembered application back to the front and
+// presses Command+V in it, a moment later. ErrPermissionDenied means the
+// Accessibility permission is missing (the clipboard is unchanged by this).
+func PasteToSavedApp() error {
+	if C.sl_paste_to_saved_app() != 0 {
+		return ErrPermissionDenied
+	}
+	return nil
+}

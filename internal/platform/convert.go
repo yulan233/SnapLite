@@ -232,23 +232,6 @@ func findMonitorPhysical(monitors []monitorGeometry, x, y float64) (monitorGeome
 	return monitorGeometry{}, false
 }
 
-// wheelNotches converts a logical scroll distance to Win32 wheel notches
-// (WHEEL_DELTA units): one notch per 100 logical pixels, at least one.
-// Positive dy scrolls down, which is a negative wheel delta.
-func wheelNotches(dy float64) int32 {
-	if dy == 0 {
-		return 0
-	}
-	n := int32(math.Round(math.Abs(dy) / 100))
-	if n < 1 {
-		n = 1
-	}
-	if dy > 0 {
-		return -n
-	}
-	return n
-}
-
 // windowAt returns the first (front-most) window rectangle containing the point.
 func windowAt(windows []Rect, x, y float64) (Rect, bool) {
 	for _, w := range windows {

@@ -124,7 +124,6 @@ func (s *Store) Dir() string                { return s.dir }
 func (s *Store) SetOnChange(fn func())      { s.mu.Lock(); s.onChange = fn; s.mu.Unlock() }
 func (s *Store) Version() uint64            { s.mu.Lock(); defer s.mu.Unlock(); return s.version }
 func (s *Store) Limits() Limits             { return s.limits }
-func (s *Store) SetLimits(l Limits)         { s.mu.Lock(); s.limits = l; s.mu.Unlock() }
 func hashBytes(parts ...[]byte) string {
 	h := sha256.New()
 	for _, p := range parts {
@@ -172,6 +171,22 @@ func (s *Store) changedLocked() func() {
 func notify(fn func()) {
 	if fn != nil {
 		fn()
+	}
+}
+
+// SetLimits changes the limits and drops the oldest items beyond them at once.
+func (s *Store) SetLimits(l Limits) {
+	s.mu.Lock()
+	s.limits = l
+	removed := s.evictLocked()
+	var fn func()
+	if len(removed) > 0 {
+		fn = s.changedLocked()
+	}
+	s.mu.Unlock()
+	if len(removed) > 0 {
+		s.schedule(s.persistJob(removed))
+		notify(fn)
 	}
 }
 

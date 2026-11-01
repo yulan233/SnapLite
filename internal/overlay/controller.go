@@ -27,12 +27,13 @@ type ResultKind uint8
 const (
 	Done ResultKind = iota
 	Save
-	LongShot
+	// Pin puts the picture on the desktop in its own window, where it was.
+	Pin
 	Cancel
 )
 
 func (k ResultKind) String() string {
-	return [...]string{"Done", "Save", "LongShot", "Cancel"}[k]
+	return [...]string{"Done", "Save", "Pin", "Cancel"}[k]
 }
 
 // Result is what the overlay hands to the shell.
@@ -57,28 +58,22 @@ type Controller struct {
 	onResult func(Result)
 	finished bool
 	wakes    []*app.Invalidator
-	// Hint is the text of the hint capsule.
-	hint string
 }
 
-// HintRegion and HintLongShot are the capsule texts (docs/02 §3.1).
+// HintRegion is the capsule text (docs/02 §3.1).
 const (
-	HintRegion   = "拖动选择区域 · 右键或 Esc 退出"
-	HintLongShot = "框选要滚动的区域"
-	hintShown    = 2 * time.Second
-	hintFade     = 200 * time.Millisecond
+	HintRegion = "拖动选择区域 · 右键或 Esc 退出"
+	hintShown  = 2 * time.Second
+	hintFade   = 200 * time.Millisecond
 )
 
 // NewController makes the overlays of a session. onResult runs once, on the
 // event-loop thread, when the session ends.
 func NewController(session *capture.Session, tokens sui.Tokens, onResult func(Result)) *Controller {
-	c := &Controller{Session: session, active: -1, tokens: tokens, onResult: onResult, hint: HintRegion}
-	if session.Mode == capture.ModeLongShot {
-		c.hint = HintLongShot
-	}
+	c := &Controller{Session: session, active: -1, tokens: tokens, onResult: onResult}
 	for i := range session.Frames {
 		f := &session.Frames[i]
-		st := newState(f, session.Mode)
+		st := newState(f)
 		b := f.Display.Bounds
 		for _, w := range session.Windows {
 			r := clampRect(vui.Rect{X: float32(w.X - b.X), Y: float32(w.Y - b.Y), Width: float32(w.W), Height: float32(w.H)}, st.size())
@@ -248,7 +243,7 @@ func (c *Controller) press(i int, st *State, p vui.Point, clicks int) {
 		st.setSel(vui.Rect{X: p.X, Y: p.Y})
 	case PhaseEditing:
 		if clicks == 2 && contains(st.Sel, p) {
-			c.finish(c.doneKind())
+			c.finish(Done)
 			return
 		}
 		if h := handleAt(st.Sel, p); h >= 0 {
@@ -304,19 +299,9 @@ func (c *Controller) releaseDrag(st *State) {
 		}
 		st.Phase = PhaseEditing
 		st.HasSnap = false
-		if st.Mode == capture.ModeLongShot {
-			c.finish(LongShot)
-		}
 	case DragDraw:
 		st.Doc.Commit()
 	}
-}
-
-func (c *Controller) doneKind() ResultKind {
-	if c.Session.Mode == capture.ModeLongShot {
-		return LongShot
-	}
-	return Done
 }
 
 func (c *Controller) key(i int, e vui.KeyEvent) vui.EventResult {
@@ -330,7 +315,7 @@ func (c *Controller) key(i int, e vui.KeyEvent) vui.EventResult {
 		return handled
 	case vui.KeyEnter:
 		if st.Phase == PhaseEditing {
-			c.finish(c.doneKind())
+			c.finish(Done)
 		}
 		return handled
 	case vui.KeyLeft, vui.KeyRight, vui.KeyUp, vui.KeyDown:
@@ -377,9 +362,7 @@ func (c *Controller) shortcut(i int, e vui.KeyEvent) vui.EventResult {
 	case "y":
 		st.Doc.Redo()
 	case "s":
-		if c.Session.Mode == capture.ModeRegion {
-			c.finish(Save)
-		}
+		c.finish(Save)
 	case "c":
 		if shift || st.Phase != PhaseEditing {
 			// Copy the colour under the pointer (the magnifier's value).
@@ -388,9 +371,9 @@ func (c *Controller) shortcut(i int, e vui.KeyEvent) vui.EventResult {
 			}
 			return vui.EventResult{Handled: true, ClipboardText: st.pixel}
 		}
-		c.finish(c.doneKind())
+		c.finish(Done)
 	case "1", "2", "3", "4":
-		if st.Phase == PhaseEditing && st.Mode == capture.ModeRegion {
+		if st.Phase == PhaseEditing {
 			t := annotate.Tool(e.Text[0]-'1') + annotate.ToolRect
 			c.toggleTool(st, t)
 		}
@@ -408,13 +391,10 @@ func (c *Controller) toggleTool(st *State, t annotate.Tool) {
 	}
 }
 
-// toolbarSpec is the toolbar for this session's mode.
+// toolbarSpec is the toolbar's buttons and their state.
 func (c *Controller) toolbarSpec(st *State) sui.ToolbarSpec {
-	if st.Mode == capture.ModeLongShot {
-		return sui.ToolbarSpec{Cancel: true, Done: true, DoneText: "开始滚动"}
-	}
 	return sui.ToolbarSpec{
-		Tools: true, LongShot: true, Save: true, Cancel: true, Done: true,
+		Tools: true, Pin: true, Save: true, Cancel: true, Done: true,
 		Tool: st.Doc.Tool, CanUndo: st.Doc.CanUndo(), CanRedo: st.Doc.CanRedo(),
 	}
 }
@@ -428,13 +408,13 @@ func (c *Controller) act(st *State, a sui.Action) {
 		st.Doc.Undo()
 	case sui.ActRedo:
 		st.Doc.Redo()
-	case sui.ActLongShot:
-		c.finish(LongShot)
+	case sui.ActPin:
+		c.finish(Pin)
 	case sui.ActSave:
 		c.finish(Save)
 	case sui.ActCancel:
 		c.finish(Cancel)
 	case sui.ActDone:
-		c.finish(c.doneKind())
+		c.finish(Done)
 	}
 }

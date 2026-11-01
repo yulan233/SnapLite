@@ -22,6 +22,12 @@ type panelRig struct {
 
 func newPanelRig(t *testing.T, fill func(*Store)) *panelRig {
 	t.Helper()
+	return newPanelRigSetup(t, fill, nil)
+}
+
+// newPanelRigSetup lets setup configure the panel before its first paint.
+func newPanelRigSetup(t *testing.T, fill func(*Store), setup func(*Panel)) *panelRig {
+	t.Helper()
 	r := &panelRig{t: t, store: open(t, t.TempDir(), Limits{}), clip: &fakeClip{}}
 	if fill != nil {
 		fill(r.store)
@@ -31,6 +37,9 @@ func newPanelRig(t *testing.T, fill func(*Store)) *panelRig {
 	r.panel.OnClose = func() { r.closes++ }
 	r.panel.pending = map[string]bool{}
 	r.panel.ensureThumbs()
+	if setup != nil {
+		setup(r.panel)
+	}
 	var canvas vui.Canvas
 	d, err := app.NewDriver(r.panel.Config(app.StatusAnchor{}), &canvas)
 	if err != nil {

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"image"
 	"image/png"
-	"math"
 	"os"
 	"sync"
 	"syscall"
@@ -47,7 +46,6 @@ var (
 	procSetForegroundWindow           = user32.NewProc("SetForegroundWindow")
 	procSetFocus                      = user32.NewProc("SetFocus")
 	procKeybdEvent                    = user32.NewProc("keybd_event")
-	procSetWindowDisplayAffinity      = user32.NewProc("SetWindowDisplayAffinity")
 	procIsWindowVisible               = user32.NewProc("IsWindowVisible")
 	procIsIconic                      = user32.NewProc("IsIconic")
 	procGetWindowThreadProcessId      = user32.NewProc("GetWindowThreadProcessId")
@@ -63,7 +61,6 @@ var (
 	procAddClipboardFormatListener    = user32.NewProc("AddClipboardFormatListener")
 	procRemoveClipboardFormatListener = user32.NewProc("RemoveClipboardFormatListener")
 	procSendInput                     = user32.NewProc("SendInput")
-	procSetCursorPos                  = user32.NewProc("SetCursorPos")
 	procGetCursorPos                  = user32.NewProc("GetCursorPos")
 	procGetThreadDpiAwarenessContext  = user32.NewProc("GetThreadDpiAwarenessContext")
 	procAreDpiAwarenessContextsEqual  = user32.NewProc("AreDpiAwarenessContextsEqual")
@@ -72,6 +69,7 @@ var (
 	procUnhookWindowsHookEx           = user32.NewProc("UnhookWindowsHookEx")
 	procCallNextHookEx                = user32.NewProc("CallNextHookEx")
 	procGetAsyncKeyState              = user32.NewProc("GetAsyncKeyState")
+	procGetForegroundWindow           = user32.NewProc("GetForegroundWindow")
 
 	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
 	procCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
@@ -122,14 +120,8 @@ const (
 	gmemMoveable    = 0x0002
 	errHotkeyExists = 1409
 
-	inputMouse       = 0
-	mouseEventFWheel = 0x0800
-	wheelDelta       = 120
-
 	vkMenu          = 0x12
 	keyEventFKeyUp  = 0x0002
-	wdaMonitor      = 0x01
-	wdaExcludeCapt  = 0x11
 	dwmExtendedRect = 9
 	dwmCloaked      = 14
 	monitorPrimary  = 1
@@ -172,19 +164,6 @@ type bitmapInfoHeader struct {
 	YPelsPerMeter int32
 	ClrUsed       uint32
 	ClrImportant  uint32
-}
-
-type mouseInput struct {
-	DX, DY    int32
-	MouseData uint32
-	Flags     uint32
-	Time      uint32
-	ExtraInfo uintptr
-}
-
-type input struct {
-	Type  uint32
-	Mouse mouseInput
 }
 
 // pointer turns an address returned by a Win32 call into an unsafe.Pointer
@@ -428,14 +407,6 @@ func CaptureDisplay(id uint32) (*image.RGBA, error) {
 	return capturePhysical(m.Physical)
 }
 
-func CaptureRect(displayID uint32, r Rect) (*image.RGBA, error) {
-	m, err := monitorByID(displayID)
-	if err != nil {
-		return nil, err
-	}
-	return capturePhysical(m.toPhysical(r))
-}
-
 func PrefetchCaptureContent()           {}
 func HasScreenCapturePermission() bool  { return true }
 func RequestScreenCapturePermission()   {}
@@ -524,17 +495,6 @@ func FloatWindow(title string, bounds Rect) error {
 		phys = m.toPhysical(bounds)
 	}
 	procSetWindowPos.Call(hwnd, hwndTopmost, uintptr(int32(phys.X)), uintptr(int32(phys.Y)), uintptr(int32(phys.W)), uintptr(int32(phys.H)), swpShowWindow|swpFrameChanged|swpNoActivate)
-	return nil
-}
-
-func SetExcludedFromCapture(title string) error {
-	hwnd := findWindow(title)
-	if hwnd == 0 {
-		return ErrNotFound
-	}
-	if ok, _, _ := procSetWindowDisplayAffinity.Call(hwnd, wdaExcludeCapt); ok == 0 {
-		procSetWindowDisplayAffinity.Call(hwnd, wdaMonitor)
-	}
 	return nil
 }
 
@@ -817,7 +777,12 @@ func setClipboard(dib, pngData []byte) error {
 	if err := openClipboard(); err != nil {
 		return err
 	}
-	defer procCloseClipboard.Call()
+	// The sequence number moves when the clipboard closes, so SnapLite's own
+	// change is recorded after closing it (deferred calls run last-first).
+	defer func() {
+		procCloseClipboard.Call()
+		setOwnClipboardCount(ClipboardChangeCount())
+	}()
 	procEmptyClipboard.Call()
 	dibHandle, err := globalBytes(dib)
 	if err != nil {
@@ -832,8 +797,6 @@ func setClipboard(dib, pngData []byte) error {
 			procGlobalFree.Call(pngHandle)
 		}
 	}
-	// The sequence number moves when the clipboard closes.
-	defer func() { setOwnClipboardCount(ClipboardChangeCount()) }()
 	return nil
 }
 
@@ -891,38 +854,7 @@ func ClipboardConcealed() bool {
 	return value == 0
 }
 
-// ---- input injection -------------------------------------------------------
-
-func physicalPoint(x, y float64) (int32, int32) {
-	if m, ok := findMonitor(cachedMonitors(), x, y); ok {
-		p := m.toPhysical(Rect{X: x, Y: y})
-		return int32(p.X), int32(p.Y)
-	}
-	return int32(math.Round(x)), int32(math.Round(y))
-}
-
-func ScrollAt(x, y, dy float64) error {
-	if err := MoveCursor(x, y); err != nil {
-		return err
-	}
-	notches := wheelNotches(dy)
-	if notches == 0 {
-		return nil
-	}
-	event := input{Type: inputMouse, Mouse: mouseInput{MouseData: uint32(notches * wheelDelta), Flags: mouseEventFWheel}}
-	if sent, _, err := procSendInput.Call(1, uintptr(unsafe.Pointer(&event)), unsafe.Sizeof(event)); sent != 1 {
-		return fmt.Errorf("platform: SendInput: %w", err)
-	}
-	return nil
-}
-
-func MoveCursor(x, y float64) error {
-	px, py := physicalPoint(x, y)
-	if ok, _, err := procSetCursorPos.Call(uintptr(px), uintptr(py)); ok == 0 {
-		return fmt.Errorf("platform: SetCursorPos: %w", err)
-	}
-	return nil
-}
+// ---- pointer position -------------------------------------------------------
 
 func CursorPosition() (float64, float64) {
 	var p point
@@ -990,3 +922,36 @@ func LaunchAtLogin() bool {
 // RightAltDown reports whether the right Alt key is held now. A window that
 // records a hotkey uses it, since key events do not say which Alt is down.
 func RightAltDown() bool { return keyDown(vkRightMenu) }
+
+// ---- quick paste -------------------------------------------------------------
+
+var savedForeground uintptr
+
+// SaveForegroundApp remembers the window in front (not SnapLite's) as the
+// target of PasteToSavedApp.
+func SaveForegroundApp() {
+	if hwnd, _, _ := procGetForegroundWindow.Call(); hwnd != 0 && !ownWindow(hwnd) {
+		savedForeground = hwnd
+	}
+}
+
+const vkControl = 0x11
+
+// PasteToSavedApp brings the remembered window back to the front and presses
+// Control+V in it a moment later, when it has the keyboard.
+func PasteToSavedApp() error {
+	if savedForeground != 0 {
+		procSetForegroundWindow.Call(savedForeground)
+	}
+	go func() {
+		time.Sleep(120 * time.Millisecond)
+		events := [4]keyboardInputRecord{
+			{Type: inputKeyboard, Key: keybdInput{VK: vkControl}},
+			{Type: inputKeyboard, Key: keybdInput{VK: 'V'}},
+			{Type: inputKeyboard, Key: keybdInput{VK: 'V', Flags: keyEventFKeyUpLL}},
+			{Type: inputKeyboard, Key: keybdInput{VK: vkControl, Flags: keyEventFKeyUpLL}},
+		}
+		procSendInput.Call(uintptr(len(events)), uintptr(unsafe.Pointer(&events[0])), unsafe.Sizeof(events[0]))
+	}()
+	return nil
+}

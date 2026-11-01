@@ -21,7 +21,7 @@ const (
 	IconPen
 	IconUndo
 	IconRedo
-	IconLongShot
+	IconPin
 	IconSave
 	IconCancel
 	IconDone
@@ -83,17 +83,18 @@ func DrawIcon(canvas *vui.Canvas, icon Icon, bounds vui.Rect, color vui.Color) {
 		b.CubicTo(5.5, 8, 4, 9.8, 4, 12)
 		b.CubicTo(4, 14.2, 5.5, 16, 8, 16)
 		b.LineTo(12, 16)
-	case IconLongShot:
-		b.MoveTo(5, 3.5)
-		b.LineTo(15, 3.5)
-		b.LineTo(15, 9)
-		b.MoveTo(5, 9)
-		b.LineTo(5, 3.5)
-		b.MoveTo(10, 8)
+	case IconPin:
+		// A push pin: the cap, the body flaring into the base, the needle.
+		b.MoveTo(6.5, 3.5)
+		b.LineTo(13.5, 3.5)
+		b.MoveTo(8, 3.5)
+		b.LineTo(8, 8)
+		b.LineTo(5, 12)
+		b.LineTo(15, 12)
+		b.LineTo(12, 8)
+		b.LineTo(12, 3.5)
+		b.MoveTo(10, 12)
 		b.LineTo(10, 16.5)
-		b.MoveTo(6.5, 13)
-		b.LineTo(10, 16.5)
-		b.LineTo(13.5, 13)
 	case IconSave:
 		b.MoveTo(10, 3.5)
 		b.LineTo(10, 12.5)

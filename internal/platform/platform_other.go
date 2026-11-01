@@ -14,7 +14,6 @@ func PostMain(fn func()) { go fn() }
 
 func Displays() ([]Display, error)                  { return nil, ErrUnsupported }
 func CaptureDisplay(uint32) (*image.RGBA, error)    { return nil, ErrUnsupported }
-func CaptureRect(uint32, Rect) (*image.RGBA, error) { return nil, ErrUnsupported }
 func PrefetchCaptureContent()                       {}
 func HasScreenCapturePermission() bool              { return false }
 func RequestScreenCapturePermission()               {}
@@ -23,7 +22,7 @@ func RequestAccessibilityPermission()               {}
 func OpenPrivacySettings(string)                    {}
 func RevealDirectory(string) error                  { return ErrUnsupported }
 func RaiseOverlay(string, Rect) error               { return ErrUnsupported }
-func SetExcludedFromCapture(string) error           { return ErrUnsupported }
+func FloatWindow(string, Rect) error                { return ErrUnsupported }
 func ListWindows(bool) ([]Rect, error)              { return nil, ErrUnsupported }
 func WindowAt(float64, float64, bool) (Rect, bool)  { return Rect{}, false }
 func ActivateApp()                                  {}
@@ -33,10 +32,11 @@ func SetClipboardPNG([]byte) error                  { return ErrUnsupported }
 func ClipboardChangeCount() int64                   { return 0 }
 func WatchClipboard(func()) (func(), error)         { return nil, ErrUnsupported }
 func ClipboardConcealed() bool                      { return false }
-func ScrollAt(float64, float64, float64) error      { return ErrUnsupported }
-func MoveCursor(float64, float64) error             { return ErrUnsupported }
 func CursorPosition() (float64, float64)            { return 0, 0 }
 func SetLaunchAtLogin(bool) error                   { return ErrUnsupported }
 func LaunchAtLogin() bool                           { return false }
 
 func RightAltDown() bool { return false }
+
+func SaveForegroundApp()     {}
+func PasteToSavedApp() error { return ErrUnsupported }

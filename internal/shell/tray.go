@@ -6,7 +6,6 @@ import (
 	"github.com/vivaui/viva/app"
 
 	"snaplite/internal/annotate"
-	"snaplite/internal/capture"
 	sui "snaplite/internal/ui"
 )
 
@@ -45,9 +44,9 @@ func (s *Shell) menu() []app.MenuItem {
 		items = append(items, app.MenuItem{Title: s.hotkeyProblem, Disabled: true}, app.MenuItem{Separator: true})
 	}
 	items = append(items,
-		app.MenuItem{Title: withShortcut("截图", s.cfg.Hotkeys.Capture), Disabled: s.busy, OnSelect: func() { s.StartCapture(capture.ModeRegion) }},
-		app.MenuItem{Title: withShortcut("长截图", s.cfg.Hotkeys.LongShot), Disabled: s.busy, OnSelect: func() { s.StartCapture(capture.ModeLongShot) }},
+		app.MenuItem{Title: withShortcut("截图", s.cfg.Hotkeys.Capture), Disabled: s.busy, OnSelect: s.StartCapture},
 		app.MenuItem{Title: withShortcut("剪切板历史", s.cfg.Hotkeys.History), OnSelect: func() { s.ShowHistory(app.StatusAnchor{}) }},
+		app.MenuItem{Title: "关闭全部钉图", Disabled: len(s.pins) == 0, OnSelect: s.CloseAllPins},
 		app.MenuItem{Separator: true},
 	)
 	items = append(items, s.extraMenu()...)

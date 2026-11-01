@@ -32,11 +32,10 @@ const (
 	ActPen
 	ActUndo
 	ActRedo
-	ActLongShot
+	ActPin
 	ActSave
 	ActCancel
 	ActDone
-	ActCopy
 )
 
 type button struct {
@@ -54,8 +53,7 @@ var buttons = [...]button{
 	{ActPen, Tree.ID(ToolbarScope, "pen"), IconPen, "画笔", 0},
 	{ActUndo, Tree.ID(ToolbarScope, "undo"), IconUndo, "撤销", 1},
 	{ActRedo, Tree.ID(ToolbarScope, "redo"), IconRedo, "重做", 1},
-	{ActLongShot, Tree.ID(ToolbarScope, "longshot"), IconLongShot, "长截图", 2},
-	{ActCopy, Tree.ID(ToolbarScope, "copy"), IconCopy, "复制", 3},
+	{ActPin, Tree.ID(ToolbarScope, "pin"), IconPin, "钉住", 2},
 	{ActSave, Tree.ID(ToolbarScope, "save"), IconSave, "保存", 3},
 	{ActCancel, Tree.ID(ToolbarScope, "cancel"), IconCancel, "取消", 3},
 	{ActDone, Tree.ID(ToolbarScope, "done"), IconDone, "完成", 3},
@@ -103,27 +101,22 @@ func ActionTool(a Action) annotate.Tool {
 
 // ToolbarSpec says which buttons a toolbar shows and their state.
 type ToolbarSpec struct {
-	Tools    bool // the annotation and undo groups
-	LongShot bool
-	Copy     bool
-	Save     bool
-	Cancel   bool
-	Done     bool
-	// DoneText replaces the Done button's check mark with text ("开始滚动").
-	DoneText string
-	Tool     annotate.Tool
-	CanUndo  bool
-	CanRedo  bool
+	Tools   bool // the annotation and undo groups
+	Pin     bool
+	Save    bool
+	Cancel  bool
+	Done    bool
+	Tool    annotate.Tool
+	CanUndo bool
+	CanRedo bool
 }
 
 func (s ToolbarSpec) shows(a Action) bool {
 	switch a {
 	case ActRect, ActEllipse, ActArrow, ActPen, ActUndo, ActRedo:
 		return s.Tools
-	case ActLongShot:
-		return s.LongShot
-	case ActCopy:
-		return s.Copy
+	case ActPin:
+		return s.Pin
 	case ActSave:
 		return s.Save
 	case ActCancel:
@@ -134,16 +127,9 @@ func (s ToolbarSpec) shows(a Action) bool {
 	return false
 }
 
-func (s ToolbarSpec) buttonWidth(canvas *vui.Canvas, b button) float32 {
-	if b.act == ActDone && s.DoneText != "" {
-		return canvas.TextWidthWeight(s.DoneText, ControlTextSz, vui.WeightMedium) + 24
-	}
-	return ButtonSize
-}
-
 // layout calls fn for each visible button with its rectangle relative to the
 // toolbar's origin and returns the toolbar's width.
-func (s ToolbarSpec) layout(canvas *vui.Canvas, fn func(b button, r vui.Rect, dividerX float32)) float32 {
+func (s ToolbarSpec) layout(fn func(b button, r vui.Rect, dividerX float32)) float32 {
 	x := float32(ToolbarPadding)
 	group := -1
 	y := float32(ToolbarHeight-ButtonSize) / 2
@@ -160,18 +146,17 @@ func (s ToolbarSpec) layout(canvas *vui.Canvas, fn func(b button, r vui.Rect, di
 			x += ButtonGap
 		}
 		group = b.group
-		w := s.buttonWidth(canvas, b)
 		if fn != nil {
-			fn(b, vui.Rect{X: x, Y: y, Width: w, Height: ButtonSize}, divider)
+			fn(b, vui.Rect{X: x, Y: y, Width: ButtonSize, Height: ButtonSize}, divider)
 		}
-		x += w
+		x += ButtonSize
 	}
 	return x + ToolbarPadding
 }
 
 // ToolbarSize is the toolbar's size for spec.
 func ToolbarSize(canvas *vui.Canvas, spec ToolbarSpec) vui.Size {
-	return vui.Size{Width: spec.layout(canvas, nil), Height: ToolbarHeight}
+	return vui.Size{Width: spec.layout(nil), Height: ToolbarHeight}
 }
 
 // DrawToolbar paints the toolbar with its top-left corner at origin and
@@ -184,7 +169,7 @@ func DrawToolbar(canvas *vui.Canvas, t Tokens, spec ToolbarSpec, origin vui.Poin
 	// The surface itself blocks presses so they do not reach the page.
 	canvas.HitWithOptions(toolbarBack, bounds, "工具栏", vui.HitOptions{SkipFocus: true})
 	hovered, focused := canvas.Hovered(), canvas.FocusVisible()
-	spec.layout(canvas, func(b button, r vui.Rect, divider float32) {
+	spec.layout(func(b button, r vui.Rect, divider float32) {
 		r = r.Offset(origin.X, origin.Y)
 		if divider >= 0 {
 			canvas.Fill(vui.Rect{X: origin.X + divider, Y: origin.Y + (ToolbarHeight-20)/2, Width: 1, Height: 20}, t.SurfaceBorder)
@@ -215,10 +200,6 @@ func DrawToolbar(canvas *vui.Canvas, t Tokens, spec ToolbarSpec, origin vui.Poin
 		}
 		if focused == b.id {
 			canvas.RoundedBorder(r.Inset(vui.All(-2)), RadiusButton+2, 2, t.Accent, vui.Color{})
-		}
-		if b.act == ActDone && spec.DoneText != "" {
-			canvas.LabelCenter(spec.DoneText, r, vui.TextStyle{Size: ControlTextSz, Weight: vui.WeightMedium, Color: fg})
-			return
 		}
 		DrawIcon(canvas, b.icon, r, fg)
 	})

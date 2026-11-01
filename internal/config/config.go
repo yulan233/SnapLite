@@ -16,9 +16,8 @@ import (
 // Config is config.json. Fields missing from the file take their defaults.
 type Config struct {
 	Hotkeys struct {
-		Capture  string `json:"capture"`
-		LongShot string `json:"longshot"`
-		History  string `json:"history"`
+		Capture string `json:"capture"`
+		History string `json:"history"`
 	} `json:"hotkeys"`
 	SaveDir     string `json:"saveDir"`
 	LastSaveDir string `json:"lastSaveDir"`
@@ -27,20 +26,69 @@ type Config struct {
 		MaxItems   int   `json:"maxItems"`
 		MaxBytes   int64 `json:"maxBytes"`
 		RecordText bool  `json:"recordText"`
+		// ClickAction is what clicking a history item does: "copy" puts it on
+		// the clipboard, "paste" also pastes it into the application in front.
+		ClickAction string `json:"clickAction"`
 	} `json:"history"`
-	LongShot struct {
-		Mode      string `json:"mode"`
-		MaxHeight int    `json:"maxHeight"`
-	} `json:"longshot"`
+	// Capture is how screenshots come out. Quality only applies to saved
+	// files: the clipboard, the history and pins always get lossless PNG.
+	Capture struct {
+		Quality string `json:"quality"` // QualityPNG, QualityHigh, QualityMedium, QualityLow
+		Scale   string `json:"scale"`   // ScaleOriginal, Scale1x
+	} `json:"capture"`
 
 	path string
 }
 
+// History click actions.
+const (
+	ClickCopy  = "copy"
+	ClickPaste = "paste"
+)
+
+// Capture qualities: PNG, or JPEG at 92, 80 and 60.
+const (
+	QualityPNG    = "png"
+	QualityHigh   = "high"
+	QualityMedium = "medium"
+	QualityLow    = "low"
+)
+
+// Qualities are the capture qualities in the order the settings window lists them.
+var Qualities = []string{QualityPNG, QualityHigh, QualityMedium, QualityLow}
+
+// Capture scales: the captured physical pixels, or one pixel per logical
+// pixel (the picture shrunk by the display's scale).
+const (
+	ScaleOriginal = "original"
+	Scale1x       = "1x"
+)
+
+// JPEGQuality is the JPEG quality a saved file is encoded with, 0 for PNG.
+func (c *Config) JPEGQuality() int {
+	switch c.Capture.Quality {
+	case QualityHigh:
+		return 92
+	case QualityMedium:
+		return 80
+	case QualityLow:
+		return 60
+	}
+	return 0
+}
+
+// MaxItemsChoices and MaxBytesChoices are the history limits the settings
+// window offers.
+var (
+	MaxItemsChoices = []int{20, 50, 100, 200, 500, 1000}
+	MaxBytesChoices = []int64{100 << 20, 500 << 20, 1 << 30, 2 << 30}
+)
+
 // Default returns the built-in configuration.
 func Default() *Config { return DefaultFor(runtime.GOOS) }
 
-// DefaultFor is the built-in configuration of one platform: Option+F1..F3 on
-// macOS, right Alt+F1..F3 on Windows.
+// DefaultFor is the built-in configuration of one platform: Option+F1/F2 on
+// macOS, right Alt+F1/F2 on Windows.
 func DefaultFor(goos string) *Config {
 	c := &Config{}
 	alt := "RightAlt"
@@ -48,14 +96,14 @@ func DefaultFor(goos string) *Config {
 		alt = "Option"
 	}
 	c.Hotkeys.Capture = alt + "+F1"
-	c.Hotkeys.LongShot = alt + "+F2"
-	c.Hotkeys.History = alt + "+F3"
+	c.Hotkeys.History = alt + "+F2"
 	c.History.Enabled = true
 	c.History.MaxItems = 100
 	c.History.MaxBytes = 500 << 20
 	c.History.RecordText = true
-	c.LongShot.Mode = "auto"
-	c.LongShot.MaxHeight = 30000
+	c.History.ClickAction = ClickCopy
+	c.Capture.Quality = QualityPNG
+	c.Capture.Scale = ScaleOriginal
 	return c
 }
 
@@ -106,13 +154,14 @@ func LoadFrom(path string) (*Config, error) {
 	return c, nil
 }
 
-// Hotkeys the 0.1.0 defaults wrote into config.json. A file that still holds
-// one gets the current default instead: the user never chose it.
-var legacyHotkeys = map[string]bool{
-	"CmdOrCtrl+Shift+A": true,
-	"CmdOrCtrl+Shift+L": true,
-	"CmdOrCtrl+Shift+V": true,
-}
+// Hotkeys earlier defaults wrote into config.json, per hotkey: 0.1.0's
+// Cmd/Ctrl+Shift chords, and F3 for the history from when F2 was the long
+// shot's. A file that still holds one gets the current default instead: the
+// user never chose it.
+var (
+	legacyCapture = map[string]bool{"CmdOrCtrl+Shift+A": true}
+	legacyHistory = map[string]bool{"CmdOrCtrl+Shift+V": true, "Option+F3": true, "RightAlt+F3": true}
+)
 
 // normalize replaces values that cannot work with the defaults. It reports
 // whether anything changed, so LoadFrom can write the file back.
@@ -120,14 +169,15 @@ func (c *Config) normalize() bool {
 	d := Default()
 	changed := false
 	for _, pair := range [...]struct {
-		value *string
-		def   string
+		value  *string
+		def    string
+		legacy map[string]bool
+		other  string // the other hotkey, which the default must not repeat
 	}{
-		{&c.Hotkeys.Capture, d.Hotkeys.Capture},
-		{&c.Hotkeys.LongShot, d.Hotkeys.LongShot},
-		{&c.Hotkeys.History, d.Hotkeys.History},
+		{&c.Hotkeys.Capture, d.Hotkeys.Capture, legacyCapture, c.Hotkeys.History},
+		{&c.Hotkeys.History, d.Hotkeys.History, legacyHistory, c.Hotkeys.Capture},
 	} {
-		if *pair.value == "" || legacyHotkeys[*pair.value] {
+		if *pair.value == "" || pair.legacy[*pair.value] && pair.def != pair.other {
 			*pair.value = pair.def
 			changed = true
 		}
@@ -138,11 +188,16 @@ func (c *Config) normalize() bool {
 	if c.History.MaxBytes <= 0 {
 		c.History.MaxBytes = d.History.MaxBytes
 	}
-	if c.LongShot.Mode != "manual" {
-		c.LongShot.Mode = "auto"
+	if c.History.ClickAction != ClickPaste {
+		c.History.ClickAction = ClickCopy
 	}
-	if c.LongShot.MaxHeight <= 0 {
-		c.LongShot.MaxHeight = d.LongShot.MaxHeight
+	switch c.Capture.Quality {
+	case QualityPNG, QualityHigh, QualityMedium, QualityLow:
+	default:
+		c.Capture.Quality = QualityPNG
+	}
+	if c.Capture.Scale != Scale1x {
+		c.Capture.Scale = ScaleOriginal
 	}
 	return changed
 }
@@ -248,9 +303,9 @@ func SpecFor(goos string, h platform.Hotkey) string {
 	return strings.Join(append(parts, keyName(h.Key)), "+")
 }
 
-// HotkeySpecs are the three configured hotkeys: capture, long shot, history.
-func (c *Config) HotkeySpecs() [3]*string {
-	return [3]*string{&c.Hotkeys.Capture, &c.Hotkeys.LongShot, &c.Hotkeys.History}
+// HotkeySpecs are the two configured hotkeys: capture and history.
+func (c *Config) HotkeySpecs() [2]*string {
+	return [2]*string{&c.Hotkeys.Capture, &c.Hotkeys.History}
 }
 
 // parseKey reads a lower-case key name: one letter or digit, or f1..f12.

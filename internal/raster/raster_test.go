@@ -1,8 +1,10 @@
 package raster
 
 import (
+	"bytes"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"testing"
 
 	"snaplite/internal/annotate"
@@ -143,5 +145,96 @@ func BenchmarkToBGRA4K(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		dst = ToBGRA(dst, img)
+	}
+}
+
+func TestEncodeFile(t *testing.T) {
+	img := gray(64, 48)
+	data, ext, err := EncodeFile(img, 0)
+	if err != nil || ext != "png" || !bytes.HasPrefix(data, []byte("\x89PNG")) {
+		t.Fatalf("quality 0 is PNG: %q %v", ext, err)
+	}
+	sizes := map[int]int{}
+	for _, q := range []int{92, 80, 60} {
+		data, ext, err := EncodeFile(noise(256, 256), q)
+		if err != nil || ext != "jpg" || !bytes.HasPrefix(data, []byte{0xFF, 0xD8, 0xFF}) {
+			t.Fatalf("quality %d is JPEG: %q %v", q, ext, err)
+		}
+		back, err := jpeg.Decode(bytes.NewReader(data))
+		if err != nil || back.Bounds() != image.Rect(0, 0, 256, 256) {
+			t.Fatalf("quality %d does not decode: %v", q, err)
+		}
+		sizes[q] = len(data)
+	}
+	if !(sizes[92] > sizes[80] && sizes[80] > sizes[60]) {
+		t.Fatalf("lower quality should be smaller: %v", sizes)
+	}
+	// A flat grey survives JPEG almost unchanged.
+	data, _, _ = EncodeFile(img, 80)
+	back, _ := jpeg.Decode(bytes.NewReader(data))
+	if r, _, _, _ := back.At(10, 10).RGBA(); r>>8 < 195 || r>>8 > 205 {
+		t.Fatalf("JPEG grey = %d", r>>8)
+	}
+}
+
+func TestEncodeJPEGPutsTransparencyOnWhite(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 16, 16)) // fully transparent black
+	data, err := EncodeJPEG(img, 92)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, _ := jpeg.Decode(bytes.NewReader(data))
+	if r, g, b, _ := back.At(8, 8).RGBA(); r>>8 < 245 || g>>8 < 245 || b>>8 < 245 {
+		t.Fatalf("transparent pixels became %d,%d,%d, want white", r>>8, g>>8, b>>8)
+	}
+	if img.Pix[3] != 0 {
+		t.Fatal("the picture itself is not changed")
+	}
+}
+
+// noise is a picture JPEG cannot compress well, so quality shows in the size.
+func noise(w, h int) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	seed := uint32(1)
+	for i := 0; i < len(img.Pix); i += 4 {
+		seed = seed*1664525 + 1013904223
+		img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = uint8(seed>>24), uint8(seed>>16), uint8(seed>>8), 255
+	}
+	return img
+}
+
+func TestDownscaleAverages(t *testing.T) {
+	// A 2× capture of a checkerboard of single physical pixels becomes a flat
+	// mid grey at 1×: each logical pixel averages its 2×2 box.
+	img := image.NewRGBA(image.Rect(0, 0, 8, 6))
+	for y := 0; y < 6; y++ {
+		for x := 0; x < 8; x++ {
+			v := uint8(0)
+			if (x+y)%2 == 0 {
+				v = 200
+			}
+			img.SetRGBA(x, y, color.RGBA{v, v, v, 255})
+		}
+	}
+	out := Downscale(img, 2)
+	if out.Bounds() != image.Rect(0, 0, 4, 3) {
+		t.Fatalf("1× size = %v", out.Bounds())
+	}
+	for y := 0; y < 3; y++ {
+		for x := 0; x < 4; x++ {
+			if c := at(out, x, y); c != (color.RGBA{100, 100, 100, 255}) {
+				t.Fatalf("pixel %d,%d = %v, want the 2×2 average", x, y, c)
+			}
+		}
+	}
+	// A fractional scale rounds the size; 1× and below leave the picture alone.
+	if b := Downscale(gray(300, 200), 1.5).Bounds(); b != image.Rect(0, 0, 200, 133) {
+		t.Fatalf("1.5× → %v", b)
+	}
+	if src := gray(30, 20); Downscale(src, 1) != src {
+		t.Fatal("scale 1 returns the picture itself")
+	}
+	if b := Shrink(gray(10, 10), 40, 0).Bounds(); b != image.Rect(0, 0, 10, 1) {
+		t.Fatalf("Shrink never enlarges and keeps at least one pixel: %v", b)
 	}
 }

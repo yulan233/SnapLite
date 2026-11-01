@@ -19,8 +19,6 @@ type Tokens struct {
 	Selected      vui.Color
 	Danger        vui.Color
 	LabelBg       vui.Color
-	// Workspace is the editor's background behind the image.
-	Workspace vui.Color
 	// OnAccent is the foreground on an Accent fill.
 	OnAccent vui.Color
 	// Guide is the crosshair colour on the overlay.
@@ -46,7 +44,6 @@ func Light() Tokens {
 		Selected:      withAlpha(accent, 0.14),
 		Danger:        vui.RGB24(0xE5484D),
 		LabelBg:       vui.RGBA(0, 0, 0, 0.72),
-		Workspace:     vui.RGB24(0xF2F3F5),
 		OnAccent:      vui.RGB24(0xFFFFFF),
 		Guide:         vui.RGBA(255, 255, 255, 0.60),
 	}
@@ -65,7 +62,6 @@ func Dark() Tokens {
 	t.Hover = vui.RGBA(255, 255, 255, 0.08)
 	t.Selected = withAlpha(accent, 0.24)
 	t.Danger = vui.RGB24(0xF2555A)
-	t.Workspace = vui.RGB24(0x151619)
 	return t
 }
 

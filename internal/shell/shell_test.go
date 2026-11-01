@@ -13,8 +13,14 @@ import (
 
 func TestSaveName(t *testing.T) {
 	when := time.Date(2026, 11, 1, 9, 30, 15, 0, time.Local)
-	if got := SaveName(when); got != "简截_20261101_093015.png" {
+	if got := SaveName(when, "png"); got != "简截_20261101_093015.png" {
 		t.Fatalf("SaveName = %q", got)
+	}
+	if got := SaveName(when, "jpg"); got != "简截_20261101_093015.jpg" {
+		t.Fatalf("SaveName jpg = %q", got)
+	}
+	if got := TextSaveName(when); got != "剪切板_20261101_093015.txt" {
+		t.Fatalf("TextSaveName = %q", got)
 	}
 }
 
@@ -63,5 +69,31 @@ func TestTrayIcon(t *testing.T) {
 	}
 	if withShortcut("截图", "CmdOrCtrl+Shift+A") == "截图" || withShortcut("截图", "bogus") != "截图" {
 		t.Fatal("menu titles")
+	}
+}
+
+func TestTrayMenu(t *testing.T) {
+	s, _ := testShell(t, nil)
+	find := func(title string) (app.MenuItem, bool) {
+		for _, item := range s.menu() {
+			if strings.HasPrefix(item.Title, title) {
+				return item, true
+			}
+		}
+		return app.MenuItem{}, false
+	}
+	if _, ok := find("长截图"); ok {
+		t.Fatal("the long shot is gone from the tray")
+	}
+	item, ok := find("关闭全部钉图")
+	if !ok || !item.Disabled {
+		t.Fatal("关闭全部钉图 is there, disabled without pins")
+	}
+	s.pins = append(s.pins, &pinWindow{})
+	if item, _ := find("关闭全部钉图"); item.Disabled {
+		t.Fatal("关闭全部钉图 is enabled with a pin open")
+	}
+	if item, _ := find("剪切板历史"); !strings.Contains(item.Title, "⌥F2") && !strings.Contains(item.Title, "右Alt+F2") {
+		t.Fatalf("history shortcut in the menu: %q", item.Title)
 	}
 }

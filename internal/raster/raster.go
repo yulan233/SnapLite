@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"image"
 	"image/draw"
+	"image/jpeg"
 	"image/png"
 	"math"
 	"sync/atomic"
@@ -93,6 +94,50 @@ func DecodePNG(data []byte) (*image.RGBA, error) {
 	return ToRGBA(img), nil
 }
 
+// EncodeJPEG encodes at quality 1–100. JPEG has no alpha: a picture with
+// transparent pixels (a copied PNG; screenshots are opaque) is put on white.
+func EncodeJPEG(img *image.RGBA, quality int) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, onWhite(img), &jpeg.Options{Quality: quality}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// onWhite returns img when it is opaque, else a copy composited onto white.
+func onWhite(img *image.RGBA) *image.RGBA {
+	opaque := true
+	for i := 3; i < len(img.Pix); i += 4 {
+		if img.Pix[i] != 0xFF {
+			opaque = false
+			break
+		}
+	}
+	if opaque {
+		return img
+	}
+	out := Crop(img, img.Bounds())
+	for i := 0; i < len(out.Pix); i += 4 {
+		a := uint32(out.Pix[i+3])
+		for c := 0; c < 3; c++ {
+			out.Pix[i+c] = uint8((uint32(out.Pix[i+c])*a + 255*(255-a) + 127) / 255)
+		}
+		out.Pix[i+3] = 0xFF
+	}
+	return out
+}
+
+// EncodeFile encodes a picture for saving: JPEG at jpegQuality, or PNG when it
+// is 0. It returns the data and the file extension ("png" or "jpg").
+func EncodeFile(img *image.RGBA, jpegQuality int) ([]byte, string, error) {
+	if jpegQuality <= 0 {
+		data, err := EncodePNG(img)
+		return data, "png", err
+	}
+	data, err := EncodeJPEG(img, jpegQuality)
+	return data, "jpg", err
+}
+
 // Thumbnail shrinks img so its longer side is at most maxSide, averaging
 // boxes of source pixels. Smaller images are copied unchanged.
 func Thumbnail(img image.Image, maxSide int) *image.RGBA {
@@ -102,8 +147,30 @@ func Thumbnail(img image.Image, maxSide int) *image.RGBA {
 		return Crop(src, src.Bounds())
 	}
 	scale := float64(maxSide) / float64(max(w, h))
-	tw, th := max(1, int(math.Round(float64(w)*scale))), max(1, int(math.Round(float64(h)*scale)))
+	return Shrink(src, max(1, int(math.Round(float64(w)*scale))), max(1, int(math.Round(float64(h)*scale))))
+}
+
+// Downscale shrinks a capture by a display's scale (physical pixels per
+// logical pixel) to one pixel per logical pixel. A scale of 1 or less returns
+// img itself.
+func Downscale(img *image.RGBA, scale float64) *image.RGBA {
+	if scale <= 1 {
+		return img
+	}
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	return Shrink(img, max(1, int(math.Round(float64(w)/scale))), max(1, int(math.Round(float64(h)/scale))))
+}
+
+// Shrink resamples src to tw×th, no larger than src, averaging the box of
+// source pixels under each output pixel.
+func Shrink(src *image.RGBA, tw, th int) *image.RGBA {
+	src = ToRGBA(src)
+	w, h := src.Bounds().Dx(), src.Bounds().Dy()
+	tw, th = min(max(tw, 1), max(w, 1)), min(max(th, 1), max(h, 1))
 	out := image.NewRGBA(image.Rect(0, 0, tw, th))
+	if w == 0 || h == 0 {
+		return out
+	}
 	for ty := 0; ty < th; ty++ {
 		y0, y1 := ty*h/th, max((ty+1)*h/th, ty*h/th+1)
 		for tx := 0; tx < tw; tx++ {

@@ -36,11 +36,11 @@ func TestBeginCapturesEveryDisplay(t *testing.T) {
 		{ID: 1, Bounds: platform.Rect{W: 1440, H: 900}, Scale: 2, Primary: true},
 		{ID: 7, Bounds: platform.Rect{X: 1440, W: 1920, H: 1080}, Scale: 1.5},
 	}}
-	s, err := Begin(src, ModeLongShot)
+	s, err := Begin(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.Frames) != 2 || s.Mode != ModeLongShot || len(s.Windows) != 1 {
+	if len(s.Frames) != 2 || len(s.Windows) != 1 {
 		t.Fatalf("session = %+v", s)
 	}
 	f := s.Frames[1]
@@ -55,10 +55,10 @@ func TestBeginCapturesEveryDisplay(t *testing.T) {
 
 func TestBeginPermission(t *testing.T) {
 	src := fakeSource{displays: []platform.Display{{ID: 1, Bounds: platform.Rect{W: 10, H: 10}, Scale: 1}}, fail: platform.ErrPermissionDenied}
-	if _, err := Begin(src, ModeRegion); !errors.Is(err, platform.ErrPermissionDenied) {
+	if _, err := Begin(src); !errors.Is(err, platform.ErrPermissionDenied) {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := Begin(fakeSource{}, ModeRegion); !errors.Is(err, ErrNoDisplays) {
+	if _, err := Begin(fakeSource{}); !errors.Is(err, ErrNoDisplays) {
 		t.Fatalf("err = %v", err)
 	}
 }

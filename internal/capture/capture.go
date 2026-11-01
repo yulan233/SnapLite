@@ -12,14 +12,6 @@ import (
 	"snaplite/internal/raster"
 )
 
-// Mode is what a capture session is for.
-type Mode uint8
-
-const (
-	ModeRegion Mode = iota
-	ModeLongShot
-)
-
 // Frame is one display's frozen picture.
 type Frame struct {
 	Display platform.Display
@@ -77,7 +69,6 @@ func (f *Frame) Crop(r image.Rectangle) *image.RGBA { return raster.Crop(f.Image
 // Session is one screenshot: a frame per display.
 type Session struct {
 	Frames []Frame
-	Mode   Mode
 	// Windows are other applications' windows front to back in screen
 	// logical coordinates, cached at the start for window snapping.
 	Windows []platform.Rect
@@ -103,7 +94,7 @@ var ErrNoDisplays = errors.New("capture: no displays")
 // Begin captures every display concurrently. It blocks; call it off the
 // event-loop thread. A missing permission is reported as
 // platform.ErrPermissionDenied.
-func Begin(src Source, mode Mode) (*Session, error) {
+func Begin(src Source) (*Session, error) {
 	displays, err := src.Displays()
 	if err != nil {
 		return nil, err
@@ -133,7 +124,7 @@ func Begin(src Source, mode Mode) (*Session, error) {
 			return nil, err
 		}
 	}
-	return &Session{Frames: frames, Mode: mode, Windows: windows}, nil
+	return &Session{Frames: frames, Windows: windows}, nil
 }
 
 // Release drops the frames so the large pictures can be collected.

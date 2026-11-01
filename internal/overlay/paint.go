@@ -196,10 +196,10 @@ func (c *Controller) paintHint(canvas *vui.Canvas, st *State, t sui.Tokens, size
 	}
 	style := vui.TextStyle{Size: sui.ControlTextSz, Weight: vui.WeightMedium, Color: white}
 	style.Color.Alpha = alpha
-	w := canvas.TextWidthWeight(c.hint, style.Size, style.Weight) + 32
+	w := canvas.TextWidthWeight(HintRegion, style.Size, style.Weight) + 32
 	r := vui.Rect{X: (size.Width - w) / 2, Y: 24, Width: w, Height: 34}
 	bg := t.LabelBg
 	bg.Alpha *= alpha
 	canvas.Rounded(r, r.Height/2, bg)
-	canvas.LabelCenter(c.hint, r, style)
+	canvas.LabelCenter(HintRegion, r, style)
 }

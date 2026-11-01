@@ -177,6 +177,11 @@ func OwnClipboardChange() bool {
 	return clipboardOwn.count != 0 && clipboardOwn.count == ClipboardChangeCount()
 }
 
+// MarkClipboardOwn records the clipboard's current state as SnapLite's own,
+// after it wrote the clipboard through a path that does not record it (Viva's
+// SetClipboardText), so the watcher does not take the change for a new copy.
+func MarkClipboardOwn() { setOwnClipboardCount(ClipboardChangeCount()) }
+
 // once wraps fn so calling the result more than once does nothing.
 func once(fn func()) func() {
 	var o sync.Once

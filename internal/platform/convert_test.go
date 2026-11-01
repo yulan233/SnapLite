@@ -165,15 +165,6 @@ func TestMonitorGeometry(t *testing.T) {
 	}
 }
 
-func TestWheelNotches(t *testing.T) {
-	cases := map[float64]int32{0: 0, 10: -1, 100: -1, 260: -3, -40: 1, -500: 5}
-	for dy, want := range cases {
-		if got := wheelNotches(dy); got != want {
-			t.Errorf("wheelNotches(%v) = %d want %d", dy, got, want)
-		}
-	}
-}
-
 func TestMainQueue(t *testing.T) {
 	var q mainQueue
 	var order []int

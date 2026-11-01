@@ -7,19 +7,49 @@ import (
 	"github.com/vivaui/viva/app"
 	vui "github.com/vivaui/viva/ui"
 
+	"snaplite/internal/config"
 	"snaplite/internal/platform"
 	sui "snaplite/internal/ui"
 )
 
 // fakeHotkeys is the shell side, applying everything at once.
 type fakeHotkeys struct {
-	specs     [3]string
+	specs     [2]string
 	suspended bool
 	taken     string // a spec that "another program" holds
 	sets      int
+
+	cfg        *config.Config
+	applied    int
+	saved      int
+	login      bool
+	loginErr   error
+	granted    bool
+	requested  int
+	openedDirs int
 }
 
-func (f *fakeHotkeys) HotkeySpecs() [3]string { return f.specs }
+func (f *fakeHotkeys) Config() *config.Config {
+	if f.cfg == nil {
+		f.cfg = config.DefaultFor("darwin")
+	}
+	return f.cfg
+}
+func (f *fakeHotkeys) ApplyHistory()              { f.applied++ }
+func (f *fakeHotkeys) SaveConfig()                { f.saved++ }
+func (f *fakeHotkeys) LaunchAtLogin() bool        { return f.login }
+func (f *fakeHotkeys) AccessibilityGranted() bool { return f.granted }
+func (f *fakeHotkeys) RequestAccessibility()      { f.requested++ }
+func (f *fakeHotkeys) OpenSaveDirectory()         { f.openedDirs++ }
+func (f *fakeHotkeys) SetLaunchAtLogin(on bool) error {
+	if f.loginErr != nil {
+		return f.loginErr
+	}
+	f.login = on
+	return nil
+}
+
+func (f *fakeHotkeys) HotkeySpecs() [2]string { return f.specs }
 func (f *fakeHotkeys) BeginRecording()        { f.suspended = true }
 func (f *fakeHotkeys) CancelRecording()       { f.suspended = false }
 func (f *fakeHotkeys) SetHotkey(i int, spec string, done func(string)) {
@@ -32,10 +62,10 @@ func (f *fakeHotkeys) SetHotkey(i int, spec string, done func(string)) {
 	f.specs[i] = spec
 	done("")
 }
-func (f *fakeHotkeys) RestoreDefaults(done func([3]string)) {
+func (f *fakeHotkeys) RestoreDefaults(done func([2]string)) {
 	f.suspended = false
-	f.specs = [3]string{"Option+F1", "Option+F2", "Option+F3"}
-	done([3]string{})
+	f.specs = [2]string{"Option+F1", "Option+F2"}
+	done([2]string{})
 }
 
 type settingsRig struct {
@@ -47,8 +77,8 @@ type settingsRig struct {
 
 func newSettingsRig(t *testing.T, goos string, rightAlt bool) *settingsRig {
 	t.Helper()
-	host := &fakeHotkeys{specs: [3]string{"Option+F1", "Option+F2", "Option+F3"}}
-	w := newSettingsWindow(host, sui.Light(), goos, func() bool { return rightAlt }, [3]string{})
+	host := &fakeHotkeys{specs: [2]string{"Option+F1", "Option+F2"}}
+	w := newSettingsWindow(host, sui.Light(), goos, func() bool { return rightAlt }, [2]string{})
 	d, err := app.NewDriver(w.config(), new(vui.Canvas))
 	if err != nil {
 		t.Fatal(err)
@@ -81,10 +111,13 @@ func (r *settingsRig) text(want string) bool {
 
 func TestSettingsShowsHotkeys(t *testing.T) {
 	r := newSettingsRig(t, "darwin", false)
-	for _, want := range []string{"截图", "长截图", "剪切板历史", "⌥F1", "⌥F2", "⌥F3", "恢复默认"} {
+	for _, want := range []string{"截图", "剪切板历史", "⌥F1", "⌥F2", "恢复默认"} {
 		if !r.text(want) {
 			t.Errorf("settings window lacks %q", want)
 		}
+	}
+	if r.text("长截图") || r.text("⌥F3") {
+		t.Error("the long shot is gone")
 	}
 }
 
@@ -107,11 +140,11 @@ func TestSettingsRecordsFunctionKey(t *testing.T) {
 
 func TestSettingsRecordsLetterChord(t *testing.T) {
 	r := newSettingsRig(t, "darwin", false)
-	r.click(settingsRows[2])
+	r.click(settingsRows[1])
 	if _, err := r.d.ShortcutChord(vui.ModifierMeta|vui.ModifierShift, 'v'); err != nil {
 		t.Fatal(err)
 	}
-	if r.host.specs[2] != "CmdOrCtrl+Shift+V" {
+	if r.host.specs[1] != "CmdOrCtrl+Shift+V" {
 		t.Fatalf("specs = %v", r.host.specs)
 	}
 }
@@ -158,7 +191,7 @@ func TestSettingsTakenKeepsOld(t *testing.T) {
 
 func TestSettingsRestoreDefaults(t *testing.T) {
 	r := newSettingsRig(t, "darwin", false)
-	r.host.specs[1] = "CmdOrCtrl+Shift+L"
+	r.host.specs[1] = "CmdOrCtrl+Shift+V"
 	r.click(settingsDefaults)
 	if r.host.specs[1] != "Option+F2" || !r.text("已恢复默认快捷键") {
 		t.Fatalf("specs = %v", r.host.specs)
